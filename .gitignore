@@ -1,0 +1,41 @@
+# Secrets and local runtime state
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.mobileprovision
+secrets/
+credentials/
+keychain/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.venv/
+venv/
+dist/
+build/
+*.egg-info/
+
+# Node / frontend
+node_modules/
+.next/
+.vite/
+coverage/
+
+# Local machine artifacts
+.DS_Store
+*.log
+tmp/
+temp/
+out/
+reports/private/
+
+# Research source trees stay in local rocket-lab, not in this repo
+sources/
+vendor/
+third_party_research/
