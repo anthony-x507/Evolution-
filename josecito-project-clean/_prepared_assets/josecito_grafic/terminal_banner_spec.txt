@@ -1,0 +1,46 @@
+JOSECITO/DIGOS TERMINAL BANNER SPEC
+
+Status:
+Static ANSI version integrated in onboarding.
+
+Visual order:
+
+1. DIGOS large title
+2. Organized Home for Useful Intelligence
+3. Thin divider
+4. Ninja ANSI image
+5. Thin divider
+6. Welcome line
+
+Target terminal layout:
+
+        ██████╗  ██╗ ██████╗  ██████╗ ███████╗
+        ██╔══██╗ ██║██╔════╝ ██╔═══██╗██╔════╝
+        ██║  ██║ ██║██║  ███╗██║   ██║███████╗
+        ██║  ██║ ██║██║   ██║██║   ██║╚════██║
+        ██████╔╝ ██║╚██████╔╝╚██████╔╝███████║
+        ╚═════╝  ╚═╝ ╚═════╝  ╚═════╝ ╚══════╝
+
+              Organized Home for Useful Intelligence
+
+                  ─────────────────────────────
+
+                    [static ninja ANSI art]
+
+                  ─────────────────────────────
+
+              Bienvenido. Vamos a configurar DIGOS.
+
+Implementation rules:
+
+- Keep presentation separate from onboarding logic.
+- Use ANSI art or Rich only when stdout is a real terminal.
+- Provide plain-text fallback for narrow or non-color terminals.
+- Do not print secrets, tokens, API keys, paths, or internal states.
+- Do not use this asset as product logic.
+- Do not add animation until the static version is approved.
+
+Integrated files:
+
+- digos_lib/terminal_presentation.py
+- digos_lib/onboarding.py

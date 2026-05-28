@@ -40,9 +40,14 @@ offline simulator using synthetic fixtures only.
 
 ## Included Subprojects
 
-- `josecito-project/` — Josecito Project codebase. Its product-facing identity
-  can be MASTER while the folder remains separated as a subproject inside this
-  repository.
+- `josecito-project/` — working/test copy. This folder can be used for local
+  runs, experiments, runtime cache, conversations, and manual testing.
+- `josecito-project-clean/` — clean source copy. This folder is the safer base
+  for future fixes and should not be used for live tokens, runtime cache, or
+  dirty manual testing.
+
+Both folders can keep the product-facing identity as MASTER while remaining
+clearly separated as Josecito Project subprojects inside this repository.
 
 ## Hard Boundaries
 
