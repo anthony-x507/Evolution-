@@ -38,6 +38,12 @@ Planning and repository bootstrap.
 No live cluster implementation is active yet. The first code phase will be an
 offline simulator using synthetic fixtures only.
 
+## Included Subprojects
+
+- `josecito-project/` — Josecito Project codebase. Its product-facing identity
+  can be MASTER while the folder remains separated as a subproject inside this
+  repository.
+
 ## Hard Boundaries
 
 This repository must not contain:

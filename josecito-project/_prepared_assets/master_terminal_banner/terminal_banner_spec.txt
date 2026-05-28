@@ -1,0 +1,48 @@
+MASTER TERMINAL BANNER SPEC
+
+Status:
+Prepared only. Not integrated.
+
+Visual order:
+
+1. MASTER large title
+2. Organized Home for Useful Intelligence
+3. Thin divider
+4. Ninja ANSI image
+5. Thin divider
+6. Welcome line
+
+Target terminal layout:
+
+        ███╗   ███╗  █████╗  ███████╗████████╗███████╗██████╗
+        ████╗ ████║ ██╔══██╗ ██╔════╝╚══██╔══╝██╔════╝██╔══██╗
+        ██╔████╔██║ ███████║ ███████╗   ██║   █████╗  ██████╔╝
+        ██║╚██╔╝██║ ██╔══██║ ╚════██║   ██║   ██╔══╝  ██╔══██╗
+        ██║ ╚═╝ ██║ ██║  ██║ ███████║   ██║   ███████╗██║  ██║
+        ╚═╝     ╚═╝ ╚═╝  ╚═╝ ╚══════╝   ╚═╝   ╚══════╝╚═╝  ╚═╝
+
+              Organized Home for Useful Intelligence
+
+                  ─────────────────────────────
+
+                    [ninja ANSI art]
+
+                  ─────────────────────────────
+
+              Bienvenido. Vamos a configurar MASTER.
+
+Implementation rules:
+
+- Keep presentation separate from onboarding logic.
+- Use ANSI art or Rich only when stdout is a real terminal.
+- Provide plain-text fallback for narrow or non-color terminals.
+- Do not print secrets, tokens, API keys, paths, or internal states.
+- Do not use this asset as product logic.
+- Do not add animation until the static version is approved.
+
+Recommended future files:
+
+- digos_lib/terminal_presentation.py
+- assets/banner_art.ansi
+- assets/banner_art_plain.txt
+
