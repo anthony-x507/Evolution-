@@ -490,6 +490,7 @@ class CapabilitySkillDefinition:
     description: str
     target_capabilities: List[str] = field(default_factory=list)
     target_limitations: List[str] = field(default_factory=list)
+    activation_requirements: List[str] = field(default_factory=list)
     tool_name: str = ""  # name of the tool the Factory will produce
 
 
@@ -508,6 +509,13 @@ CAPABILITY_SKILL_MAP: Dict[str, CapabilitySkillDefinition] = {
             "requires_whisper_api_or_similar",
             "max_audio_duration_5min",
         ],
+        activation_requirements=[
+            "recibir mensajes de voz desde Telegram",
+            "descargar el audio de Telegram de forma segura",
+            "transcribir el audio a texto con un motor STT configurado",
+            "enviar la transcripcion al agente como mensaje de texto gobernado",
+            "validar el flujo completo con audio antes de marcarlo activo",
+        ],
         tool_name="stt_processor",
     ),
     "tts_audio_output": CapabilitySkillDefinition(
@@ -522,6 +530,12 @@ CAPABILITY_SKILL_MAP: Dict[str, CapabilitySkillDefinition] = {
         target_limitations=[
             "requires_tts_api",
             "voice_quality_depends_on_provider",
+        ],
+        activation_requirements=[
+            "generar audio desde la respuesta final aprobada",
+            "enviar el archivo de audio al canal de Telegram",
+            "mantener una respuesta de texto si el audio falla",
+            "validar el flujo completo antes de marcarlo activo",
         ],
         tool_name="tts_synthesizer",
     ),
@@ -538,6 +552,13 @@ CAPABILITY_SKILL_MAP: Dict[str, CapabilitySkillDefinition] = {
         target_limitations=[
             "requires_both_stt_and_tts_apis",
             "latency_depends_on_provider",
+        ],
+        activation_requirements=[
+            "recibir audio desde Telegram",
+            "transcribir audio a texto",
+            "procesar la transcripcion por el agente",
+            "generar respuesta de voz desde salida aprobada",
+            "validar entrada y salida de voz antes de marcarlo activo",
         ],
         tool_name="voice_duplex",
     ),

@@ -197,6 +197,7 @@ class FactoryManager:
         description: str = "",
         target_capabilities: Optional[List[str]] = None,
         target_limitations: Optional[List[str]] = None,
+        activation_requirements: Optional[List[str]] = None,
         tool_name: str = "",
         requested_by: str = "agente",
     ) -> Optional[dict]:
@@ -232,6 +233,12 @@ class FactoryManager:
 
         target_capabilities = target_capabilities or ["to_be_defined"]
         target_limitations = target_limitations or ["to_be_defined"]
+        activation_requirements = activation_requirements or []
+        factory_limitations = list(target_limitations)
+        factory_limitations.extend(
+            f"activation required: {item}"
+            for item in activation_requirements
+        )
         tool_name = tool_name or capability_id
 
         def _emit(step: str, detail: str = ""):
@@ -273,7 +280,8 @@ class FactoryManager:
                 "family": family,
                 "requested_by": requested_by,
                 "target_capabilities": target_capabilities,
-                "target_limitations": target_limitations,
+                "target_limitations": factory_limitations,
+                "activation_requirements": activation_requirements,
                 "tool_name": tool_name,
                 "builder_agent": agent_name,
             },
@@ -287,7 +295,7 @@ class FactoryManager:
             skill_name=tool_name,
             description=description,
             capabilities=[],  # Start empty — Builder will fill in
-            limitations=["not_implemented_yet"],
+            limitations=["not_implemented_yet"] + factory_limitations,
             ticket_id=ticket.id,
         )
 
@@ -310,7 +318,7 @@ class FactoryManager:
         revision = self._superior.route_skill_modification(
             sandboxed.id,
             target_capabilities,
-            target_limitations,
+            factory_limitations,
         )
 
         if revision is None:
@@ -346,6 +354,7 @@ class FactoryManager:
                 "agent_name": agent_name,
                 "revision": revision,
                 "tool_name": tool_name,
+                "activation_requirements": activation_requirements,
                 "message": (
                     f"Capacidad '{capability_id}' ({family}) creada en la Factoría. "
                     f"Builder '{agent_name}' la procesó. "

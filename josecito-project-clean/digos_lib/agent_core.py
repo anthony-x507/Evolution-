@@ -173,8 +173,16 @@ class AIAgent:
             lower = status.lower()
             if "the factory finished" in lower or "waiting for activation" in lower:
                 return (
-                    "La solicitud ya pasó por la Factoría y quedó entregada para activación. "
-                    "Todavía no está activa en Telegram, así que por ahora seguimos por texto."
+                    "La Factoría preparó la capacidad, pero todavía no está activa en "
+                    "Telegram. Falta conectarla al canal vivo y validarla antes de "
+                    "marcarla como activa. Hasta que eso quede conectado, seguimos por texto."
+                )
+            if "the factory prepared" in lower or "still missing" in lower:
+                return (
+                    "La Factoría preparó la capacidad, pero todavía no está activa en "
+                    "Telegram. Falta completar la conexión de audio al canal vivo, "
+                    "la transcripción y la validación final. Hasta que eso quede conectado, "
+                    "seguimos por texto."
                 )
             if "the request is still being reviewed" in lower:
                 return (
@@ -190,6 +198,14 @@ class AIAgent:
             "mi herramienta esta lista", "mi herramienta esta", "herramienta esta lista",
             "estado del ticket", "como va el ticket", "mi ticket", "la solicitud esta lista",
             "ya termino", "esta terminado", "esta lista", "seguimiento",
+            "por que la factoria no termina", "por qué la factoría no termina",
+            "por que no termina la herramienta", "por qué no termina la herramienta",
+            "que falta para la herramienta", "qué falta para la herramienta",
+            "que falta para que la herramienta", "qué falta para que la herramienta",
+            "por que no funciona la voz", "por qué no funciona la voz",
+            "ya puedo mandar mensajes de voz", "ya puedo enviar mensajes de voz",
+            "ya puedo usar voz", "ya esta activa la voz", "ya está activa la voz",
+            "la herramienta de voz esta lista", "la herramienta de voz está lista",
         ]
         if not any(term in msg for term in status_terms):
             return ""

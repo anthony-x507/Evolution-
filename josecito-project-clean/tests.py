@@ -495,7 +495,7 @@ class TestAIAgent(unittest.TestCase):
         self.assertIn("¿Quieres que la mande a la Factoría?", first)
         self.assertEqual(len(calls), 1)
         self.assertEqual(calls[0]["capability"], "stt_audio_input")
-        self.assertIn("La solicitud ya pasó por la Factoría", second)
+        self.assertIn("La Factoría preparó la capacidad", second)
         self.assertNotIn("The Factory finished", second)
 
     def test_human_voice_request_reaches_factory_without_provider(self):
@@ -556,6 +556,46 @@ class TestAIAgent(unittest.TestCase):
         self.assertNotIn("builder", result.lower())
         self.assertNotIn("sandbox", result.lower())
 
+    def test_factory_status_question_explains_missing_activation_piece(self):
+        status = (
+            "La Factoría preparó la capacidad, pero todavía no está activa en Telegram. "
+            "Falta completar: recibir mensajes de voz desde Telegram; transcribir el audio "
+            "a texto; enviar la transcripcion al agente como mensaje de texto gobernado. "
+            "Hasta que eso quede conectado, seguimos por texto."
+        )
+        agent = agent_mod.AIAgent(
+            language="es",
+            factory_status_cb=lambda capability="": status,
+        )
+
+        def fail_classifier(message):
+            raise AssertionError("factory status should not depend on provider classification")
+
+        agent._classify_intent = fail_classifier
+
+        result = agent.process_message("Por qué la factoría no termina con la herramienta?")
+
+        self.assertIn("Falta completar", result)
+        self.assertIn("Telegram", result)
+        self.assertIn("transcribir", result)
+        self.assertNotIn("builder", result.lower())
+        self.assertNotIn("sandbox", result.lower())
+
+    def test_voice_ready_question_uses_factory_status_when_available(self):
+        agent = agent_mod.AIAgent(
+            language="es",
+            factory_status_cb=lambda capability="": (
+                "La Factoría preparó la capacidad, pero todavía no está activa en Telegram. "
+                "Falta completar: recibir mensajes de voz desde Telegram; validar el flujo completo."
+            ),
+        )
+
+        result = agent.process_message("Ya puedo mandar mensajes de voz?")
+
+        self.assertIn("todavía no está activa en Telegram", result)
+        self.assertIn("Falta completar", result)
+        self.assertNotIn("Por ahora no puedo procesar audio", result)
+
     def test_sanitizer_blocks_provider_internal_leakage(self):
         agent = agent_mod.AIAgent(language="es")
 
@@ -566,6 +606,39 @@ class TestAIAgent(unittest.TestCase):
         self.assertIn("Soy MASTER", result)
         self.assertNotIn("GPS", result)
         self.assertNotIn("ACTIVE.md", result)
+
+
+class TestFactoryStatusStore(unittest.TestCase):
+    """Tests for the product-facing Factory flag board."""
+
+    def test_pending_activation_summary_names_missing_pieces(self):
+        from digos_lib.factory_status import FactoryStatusStore
+
+        path = TEST_DIR / ".digos" / "factory_status_unit.json"
+        store = FactoryStatusStore(path)
+        store.upsert_capability(
+            "stt_audio_input",
+            family="VOICE",
+            status="factory_completed_pending_activation",
+            activation_requirements=[
+                "recibir mensajes de voz desde Telegram",
+                "transcribir el audio a texto",
+                "enviar la transcripcion al agente",
+            ],
+            activation_missing=[
+                "recibir mensajes de voz desde Telegram",
+                "transcribir el audio a texto",
+                "enviar la transcripcion al agente",
+            ],
+            next_step="conectar la capacidad al canal de Telegram.",
+        )
+
+        summary = store.public_summary("stt_audio_input", language="es")
+
+        self.assertIn("La Factoría preparó la capacidad", summary)
+        self.assertIn("Falta completar", summary)
+        self.assertIn("recibir mensajes de voz desde Telegram", summary)
+        self.assertIn("Siguiente paso", summary)
 
 
 class TestTorreDeControl(unittest.TestCase):
@@ -639,6 +712,8 @@ class TestTorreDeControl(unittest.TestCase):
         self.assertIn("internal_reviewer", self.tower._superior_agent.internal_agents)
 
     def test_request_capability_reaches_embedded_factory(self):
+        self.tower.lang = "es"
+        self.tower.state["language"] = "es"
         result = self.tower.request_capability(
             capability="stt_audio_input",
             family="VOICE",
@@ -653,6 +728,10 @@ class TestTorreDeControl(unittest.TestCase):
         self.assertTrue(result.get("audit_ticket_id"))
         self.assertIn("user_status", result)
         self.assertEqual(result.get("status"), "factory_completed_pending_activation")
+        self.assertIn("activation_missing", result)
+        self.assertIn("recibir mensajes de voz desde Telegram", result["activation_missing"])
+        self.assertIn("Falta completar", result["user_status"])
+        self.assertIn("transcribir", result["user_status"])
 
     def test_onboarding_flow_initializes_agent_with_factory_callback(self):
         from digos_lib.onboarding import OnboardingFlow
@@ -778,7 +857,8 @@ class TestTorreDeControl(unittest.TestCase):
         second = agent.process_message("sí")
 
         self.assertIn("¿Quieres que la mande a la Factoría?", first)
-        self.assertIn("La solicitud ya pasó por la Factoría", second)
+        self.assertIn("La Factoría preparó la capacidad", second)
+        self.assertIn("Falta completar", second)
         self.assertNotIn("SOLICITUD ENVIADA A LA FACTORÍA", second)
         self.assertNotIn("stt_processor", second)
         self.assertNotIn("stt_audio_input_builder", second)
@@ -809,6 +889,7 @@ if __name__ == "__main__":
     suite.addTests(loader.loadTestsFromTestCase(TestAdoptionEngine))
     suite.addTests(loader.loadTestsFromTestCase(TestTerminalPresentation))
     suite.addTests(loader.loadTestsFromTestCase(TestAIAgent))
+    suite.addTests(loader.loadTestsFromTestCase(TestFactoryStatusStore))
     suite.addTests(loader.loadTestsFromTestCase(TestTorreDeControl))
 
     runner = unittest.TextTestRunner(verbosity=2)

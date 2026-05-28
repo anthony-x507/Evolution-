@@ -934,6 +934,16 @@ class TorreDeControl:
         }
 
         skill_def = get_skill_for_capability(capability)
+        activation_requirements = (
+            list(skill_def.activation_requirements)
+            if skill_def is not None
+            else []
+        )
+        activation_next_step = (
+            "conectar la capacidad al canal de Telegram y validarla con una prueba completa."
+            if activation_requirements
+            else ""
+        )
         if skill_def is None:
             # No skill definition — just create an audit ticket
             result = self._engineer.create_capability_request(
@@ -950,6 +960,8 @@ class TorreDeControl:
                 status="registered",
                 audit_ticket_id=result.get("ticket_id", ""),
                 responsibilities=responsibilities,
+                activation_requirements=[],
+                activation_missing=[],
                 note="Capability identified without an automatic Factory definition.",
             )
             result["user_status"] = self._factory_status.public_summary(capability, language=self._active_language())
@@ -970,6 +982,9 @@ class TorreDeControl:
             status="registered",
             audit_ticket_id=audit_result.get("ticket_id", ""),
             responsibilities=responsibilities,
+            activation_requirements=activation_requirements,
+            activation_missing=activation_requirements,
+            next_step=activation_next_step,
             note="Capability request registered by the engineer.",
         )
 
@@ -991,6 +1006,9 @@ class TorreDeControl:
                 status="failed",
                 audit_ticket_id=ticket_id,
                 responsibilities=responsibilities,
+                activation_requirements=activation_requirements,
+                activation_missing=activation_requirements,
+                next_step=activation_next_step,
                 note="Factory unavailable.",
             )
             return {
@@ -1012,6 +1030,9 @@ class TorreDeControl:
             status="factory_processing",
             audit_ticket_id=audit_result.get("ticket_id", ""),
             responsibilities=responsibilities,
+            activation_requirements=activation_requirements,
+            activation_missing=activation_requirements,
+            next_step=activation_next_step,
             note="Factory is processing the request.",
         )
         try:
@@ -1021,6 +1042,7 @@ class TorreDeControl:
                 description=skill_def.description,
                 target_capabilities=skill_def.target_capabilities,
                 target_limitations=skill_def.target_limitations,
+                activation_requirements=activation_requirements,
                 tool_name=skill_def.tool_name,
                 requested_by=requester,
             )
@@ -1038,6 +1060,9 @@ class TorreDeControl:
                 status="failed",
                 audit_ticket_id=ticket_id,
                 responsibilities=responsibilities,
+                activation_requirements=activation_requirements,
+                activation_missing=activation_requirements,
+                next_step=activation_next_step,
                 note=f"Factory error: {e}",
             )
             return {
@@ -1061,6 +1086,9 @@ class TorreDeControl:
                 status="failed",
                 audit_ticket_id=ticket_id,
                 responsibilities=responsibilities,
+                activation_requirements=activation_requirements,
+                activation_missing=activation_requirements,
+                next_step=activation_next_step,
                 note="Factory returned no result.",
             )
             return {
@@ -1108,6 +1136,9 @@ class TorreDeControl:
             tool_name=tool_name,
             active=is_active,
             responsibilities=responsibilities,
+            activation_requirements=activation_requirements,
+            activation_missing=[] if is_active else activation_requirements,
+            next_step="" if is_active else activation_next_step,
             note=(
                 "Factory completed and capability is active."
                 if is_active
@@ -1117,6 +1148,8 @@ class TorreDeControl:
         factory_result["active"] = is_active
         factory_result["status"] = status
         factory_result["responsibilities"] = responsibilities
+        factory_result["activation_requirements"] = activation_requirements
+        factory_result["activation_missing"] = [] if is_active else activation_requirements
         factory_result["user_status"] = self._factory_status.public_summary(capability, language=self._active_language())
         return factory_result
 

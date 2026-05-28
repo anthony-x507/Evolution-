@@ -55,6 +55,9 @@ class FactoryStatusStore:
         tool_name: str = "",
         active: bool = False,
         responsibilities: Optional[dict[str, str]] = None,
+        activation_requirements: Optional[list[str]] = None,
+        activation_missing: Optional[list[str]] = None,
+        next_step: str = "",
         note: str = "",
     ) -> dict[str, Any]:
         """Create or update a capability request status."""
@@ -86,6 +89,14 @@ class FactoryStatusStore:
             record["request_summary"] = user_message[:240]
         if responsibilities:
             record["responsibilities"] = responsibilities
+        if activation_requirements is not None:
+            record["activation_requirements"] = list(activation_requirements)
+        if activation_missing is not None:
+            record["activation_missing"] = list(activation_missing)
+        elif active:
+            record["activation_missing"] = []
+        if next_step:
+            record["next_step"] = next_step
 
         record.setdefault("timeline", []).append({
             "at": now,
@@ -124,24 +135,49 @@ class FactoryStatusStore:
         cap = record.get("capability", "la herramienta")
         active = bool(record.get("active"))
         status = record.get("status", "")
+        missing = record.get("activation_missing") or record.get("activation_requirements") or []
+        next_step = record.get("next_step", "")
+
+        def _missing_text_es() -> str:
+            if not missing:
+                return (
+                    "Falta conectar esa capacidad al canal vivo y validarla antes de "
+                    "marcarla como activa."
+                )
+            visible = "; ".join(str(item) for item in missing[:4])
+            if len(missing) > 4:
+                visible += "; y completar la validacion final."
+            return f"Falta completar: {visible}."
+
+        def _missing_text_en() -> str:
+            if not missing:
+                return "It still needs live-channel wiring and validation before activation."
+            visible = "; ".join(str(item) for item in missing[:4])
+            if len(missing) > 4:
+                visible += "; and final validation."
+            return f"Still missing: {visible}."
 
         if language != "es":
             if active:
                 return "The requested capability is active."
             if status == "factory_completed_pending_activation":
                 return (
-                    "The Factory finished its part, but the capability is still "
-                    "waiting for activation in the live channel."
+                    "The Factory prepared the capability, but it is not active in "
+                    f"Telegram yet. {_missing_text_en()} Until that is connected, "
+                    "I can only work with text here."
                 )
             return "The request is still being reviewed."
 
         if active:
             return "La capacidad solicitada ya está activa."
         if status == "factory_completed_pending_activation":
-            return (
-                "La solicitud ya pasó por la Factoría y quedó entregada para activación. "
-                "Todavía no está activa en Telegram, así que por ahora seguimos por texto."
+            summary = (
+                "La Factoría preparó la capacidad, pero todavía no está activa en "
+                f"Telegram. {_missing_text_es()} "
             )
+            if next_step:
+                summary += f"Siguiente paso: {next_step} "
+            return summary + "Hasta que eso quede conectado, seguimos por texto."
         if status in {"factory_processing", "registered"}:
             return (
                 "La solicitud está en proceso. La Factoría y el ingeniero la tienen "
