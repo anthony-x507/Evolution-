@@ -347,7 +347,7 @@ class TestTerminalPresentation(unittest.TestCase):
         self.assertIn("Organized Home for Useful Intelligence", banner)
         self.assertIn("Vamos a configurar MASTER", banner)
         self.assertNotIn("DIGOS", banner)
-        self.assertIn("/\\", banner)
+        self.assertIn("▇", banner)
 
     def test_startup_banner_does_not_expose_runtime_values(self):
         from digos_lib.terminal_presentation import render_startup_banner
@@ -502,6 +502,27 @@ class TestTorreDeControl(unittest.TestCase):
     def test_initial_state(self):
         self.assertIsNotNone(self.tower.state)
         self.assertEqual(self.tower.lang, "en")
+
+    def test_launchd_prompt_uses_confirm_yn_and_master_copy(self):
+        self.tower._daemon_mode = True
+        self.tower.state["language"] = "es"
+        self.tower._launchd_status = lambda: {"installed": False, "running": False}
+
+        calls = []
+
+        def fake_confirm(question, default=True):
+            calls.append(question)
+            return False
+
+        self.tower._confirm_yn = fake_confirm
+        with contextlib.redirect_stdout(io.StringIO()) as output:
+            self.tower._ensure_launchd()
+
+        visible = output.getvalue()
+        self.assertTrue(calls)
+        self.assertIn("MASTER puede iniciar automaticamente", visible)
+        self.assertIn("Puedes instalarlo despues", visible)
+        self.assertNotIn("DIGOS", visible)
 
     def test_provider_base_url(self):
         url = self.tower._provider_base_url("4")

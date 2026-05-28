@@ -1537,21 +1537,37 @@ class TorreDeControl:
             return
         status = self._launchd_status()
         if status.get("installed"):
-            self._log.info("torre", "Launchd ya instalado — DIGOS vive 24/7")
+            self._log.info("torre", "Launchd ya instalado — MASTER vive 24/7")
             return
         print()
         print("  🚀 AUTO-LAUNCH")
         print("  ────────────────")
-        print("  DIGOS can start automatically when you turn on")
-        print("  your computer. So you never have to start it manually.")
+        print(self._ui_text(
+            "  MASTER can start automatically when you turn on",
+            "  MASTER puede iniciar automaticamente cuando enciendas",
+        ))
+        print(self._ui_text(
+            "  your computer. So you never have to start it manually.",
+            "  esta computadora. Asi no tienes que abrirlo manualmente.",
+        ))
         print()
-        if self._confirm("  Install auto-start?"):
+        question = self._ui_text("  Install auto-start?", "  ¿Instalar inicio automatico?")
+        if self._confirm_yn(question):
             if self._install_launchd():
-                print("  ✅ Auto-start installed. DIGOS will live 24/7.")
+                print(self._ui_text(
+                    "  ✅ Auto-start installed. MASTER will stay available.",
+                    "  ✅ Inicio automatico instalado. MASTER quedara disponible.",
+                ))
             else:
-                print("  ❌ Error instalando auto-arranque.")
+                print(self._ui_text(
+                    "  ❌ Could not install auto-start.",
+                    "  ❌ No pude instalar el inicio automatico.",
+                ))
         else:
-            print("  You can install it later with: digos --install")
+            print(self._ui_text(
+                "  You can install it later with: ./digos --install",
+                "  Puedes instalarlo despues con: ./digos --install",
+            ))
         print()
 
     def print_launchd_status(self):
