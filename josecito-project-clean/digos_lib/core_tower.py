@@ -166,6 +166,12 @@ class TorreDeControl:
     def _ui_text(self, en: str, es: str) -> str:
         return es if self.state.get("language", self.lang) == "es" else en
 
+    def _active_language(self) -> str:
+        """Return the current product language and keep tower state aligned."""
+        lang = self.state.get("language") or self.lang or "es"
+        self.lang = lang
+        return lang
+
     def run(self):
         if self._daemon_mode:
             self._run_daemon()
@@ -946,7 +952,7 @@ class TorreDeControl:
                 responsibilities=responsibilities,
                 note="Capability identified without an automatic Factory definition.",
             )
-            result["user_status"] = self._factory_status.public_summary(capability, language=self.lang)
+            result["user_status"] = self._factory_status.public_summary(capability, language=self._active_language())
             return result
 
         # ── 2. Also create audit ticket in SystemEngineer for traceability ──
@@ -990,7 +996,7 @@ class TorreDeControl:
             return {
                 "ok": False,
                 "ticket_id": ticket_id,
-                "user_status": self._factory_status.public_summary(capability, language=self.lang),
+                "user_status": self._factory_status.public_summary(capability, language=self._active_language()),
                 "message": (
                     "Request identified but Factory is not available. "
                     "An audit ticket was created for awareness. "
@@ -1037,7 +1043,7 @@ class TorreDeControl:
             return {
                 "ok": False,
                 "ticket_id": ticket_id,
-                "user_status": self._factory_status.public_summary(capability, language=self.lang),
+                "user_status": self._factory_status.public_summary(capability, language=self._active_language()),
                 "message": f"Factory error: {e}",
             }
 
@@ -1060,7 +1066,7 @@ class TorreDeControl:
             return {
                 "ok": False,
                 "ticket_id": ticket_id,
-                "user_status": self._factory_status.public_summary(capability, language=self.lang),
+                "user_status": self._factory_status.public_summary(capability, language=self._active_language()),
                 "message": "Factory could not process the request.",
             }
 
@@ -1111,12 +1117,12 @@ class TorreDeControl:
         factory_result["active"] = is_active
         factory_result["status"] = status
         factory_result["responsibilities"] = responsibilities
-        factory_result["user_status"] = self._factory_status.public_summary(capability, language=self.lang)
+        factory_result["user_status"] = self._factory_status.public_summary(capability, language=self._active_language())
         return factory_result
 
     def get_factory_user_status(self, capability: str = "") -> str:
         """Return clean user-facing Factory status for the latest request."""
-        return self._factory_status.public_summary(capability, language=self.lang)
+        return self._factory_status.public_summary(capability, language=self._active_language())
 
     def request_credential_disclosure(self, credential_type: str, requester: str = "agente") -> dict:
         """
@@ -1260,7 +1266,7 @@ class TorreDeControl:
             creation_cb=self.request_internal_agent_creation,
             capability_cb=self.request_capability,
             factory_status_cb=self.get_factory_user_status,
-            language=self.lang,
+            language=self._active_language(),
         )
         self._log.info("torre",
             f"AIAgent iniciado: {provider_id}/{model} → {base_url}")
@@ -1308,7 +1314,7 @@ class TorreDeControl:
         Internal operating notes stay internal. The public agent receives only
         enough context to answer safely and route work through the orchestra.
         """
-        lang = self.lang
+        lang = self._active_language()
         agente = self.state.get("agente", {})
 
         # ── 1. Base identity (multilingual) ──

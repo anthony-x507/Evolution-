@@ -70,6 +70,7 @@ class AIAgent:
         self._pending_rotation: Optional[str] = None  # credential_type when user is mid-rotation
         self._pending_intent: Optional[IntentClassification] = None  # intent waiting for user confirmation
         self._pending_intent_msg: str = ""  # original message that triggered the intent
+        self._pending_language: Optional[str] = None  # language change waiting for user confirmation
         self._last_public_topic: str = ""
 
         # Security Gate
@@ -107,7 +108,42 @@ class AIAgent:
         self._last_public_topic = topic or self._last_public_topic
         return response
 
+    def _detect_language_shift(self, msg: str) -> str:
+        """Return a likely message language when it differs from the active one."""
+        spanish_terms = [
+            "hola", "como estas", "como estás", "puedo", "quiero", "necesito",
+            "herramienta", "voz", "escuches", "activar", "funcion", "función",
+            "que puedes", "quien eres", "quién eres",
+        ]
+        english_terms = [
+            "hello", "hi", "how are you", "can i", "could you", "i want",
+            "i need", "please", "what can you", "who are you", "speak english",
+            "talk in english",
+        ]
+        spanish_hits = sum(1 for term in spanish_terms if term in msg)
+        english_hits = sum(1 for term in english_terms if term in msg)
+        if english_hits and english_hits > spanish_hits and self._language != "en":
+            return "en"
+        if spanish_hits and spanish_hits > english_hits and self._language != "es":
+            return "es"
+        return ""
+
     def _language_change_response(self, msg: str) -> str:
+        if self._pending_language:
+            confirmation = self._check_intent_confirmation(msg)
+            target = self._pending_language
+            if confirmation == "yes":
+                self._pending_language = None
+                self._language = target
+                if target == "es":
+                    return "Listo. Voy a continuar en español."
+                return "Done. I will continue in English."
+            if confirmation == "no":
+                self._pending_language = None
+                if self._language == "es":
+                    return "Listo. Sigo en español."
+                return "OK. I will keep English."
+
         if any(term in msg for term in ["switch to espanol", "switch to español", "cambia a espanol", "cambia a español"]):
             self._language = "es"
             return "Listo. Voy a continuar en español."
@@ -115,10 +151,39 @@ class AIAgent:
             self._language = "en"
             return "Done. I will continue in English."
         if "ingles" in msg or "english" in msg:
+            self._pending_language = "en"
             return "Sí. Podemos hablar en inglés. ¿Quieres que cambie a inglés ahora?"
         if "espanol" in msg or "spanish" in msg:
+            self._pending_language = "es"
             return "Sí. Podemos hablar en español. ¿Quieres que siga en español?"
+        shifted = self._detect_language_shift(msg)
+        if shifted == "en":
+            self._pending_language = "en"
+            return "Noté que escribiste en inglés. ¿Quieres que cambie a inglés o sigo en español?"
+        if shifted == "es":
+            self._pending_language = "es"
+            return "I noticed you switched to Spanish. Do you want me to switch too, or should I keep English?"
         return ""
+
+    def _localize_factory_status(self, status: str) -> str:
+        """Keep known Factory status messages in the active conversation language."""
+        if not status:
+            return status
+        if self._language == "es":
+            lower = status.lower()
+            if "the factory finished" in lower or "waiting for activation" in lower:
+                return (
+                    "La solicitud ya pasó por la Factoría y quedó entregada para activación. "
+                    "Todavía no está activa en Telegram, así que por ahora seguimos por texto."
+                )
+            if "the request is still being reviewed" in lower:
+                return (
+                    "La solicitud está en proceso. La Factoría y el ingeniero la tienen "
+                    "marcada para seguimiento hasta que cierre."
+                )
+            if "requested capability is active" in lower:
+                return "La capacidad solicitada ya está activa."
+        return status
 
     def _factory_status_response(self, msg: str) -> str:
         status_terms = [
@@ -130,7 +195,7 @@ class AIAgent:
             return ""
         if self._factory_status_cb:
             try:
-                return self._factory_status_cb("") or ""
+                return self._localize_factory_status(self._factory_status_cb("") or "")
             except Exception:
                 return ""
         return (
@@ -149,14 +214,14 @@ class AIAgent:
                 )
             return "¿Quieres que aclare mi respuesta anterior o que revise algo específico?"
 
-        if msg in {"hola", "buenas", "buenos dias", "buenas tardes", "buenas noches", "hello", "hi"}:
-            self._last_public_topic = "greeting"
-            return "Hola. Soy MASTER. ¿En qué puedo ayudarte hoy?"
-
         language_response = self._language_change_response(msg)
         if language_response:
             self._last_public_topic = "language"
             return language_response
+
+        if msg in {"hola", "buenas", "buenos dias", "buenas tardes", "buenas noches", "hello", "hi"}:
+            self._last_public_topic = "greeting"
+            return "Hola. Soy MASTER. ¿En qué puedo ayudarte hoy?"
 
         factory_status = self._factory_status_response(msg)
         if factory_status:
@@ -201,15 +266,37 @@ class AIAgent:
             self._last_public_topic = "identity"
             return "No tengo una edad fija porque soy una inteligencia artificial."
 
-        voice_terms = ["audio", "voz", "mensaje de voz", "escuchar", "oirme", "oírme", "microfono", "micrófono"]
+        voice_terms = [
+            "audio", "voz", "mensaje de voz", "escuchar", "escuches", "escuchame",
+            "escúchame", "oirme", "oírme", "oyeme", "óyeme", "microfono", "micrófono",
+        ]
         if any(term in msg for term in voice_terms):
             wants_tool = any(term in msg for term in [
                 "quiero", "necesito", "herramienta", "puedes pedir", "prepara",
                 "agrega", "agregar", "procesar mis mensajes", "recibas mis mensajes",
+                "activar", "activa", "habilitar", "habilita", "funcion", "función",
+                "me escuches", "escuches", "recibir", "recibas",
             ])
             self._last_public_topic = "factory" if wants_tool else "voice"
             if wants_tool:
-                return ""
+                self._pending_intent = IntentClassification(
+                    matched=True,
+                    family="VOICE",
+                    family_description="Audio/voice communication",
+                    sub_intent_id="VOICE_INPUT_CAPABILITY_REQUEST",
+                    sub_intent_description="User wants voice input capability",
+                    capability="stt_audio_input",
+                    has_gap=True,
+                    gap_response=(
+                        "Puedo preparar una solicitud para agregar mensajes de voz a MASTER. "
+                        "Todavía no queda activa hasta que la Factoría la revise y se conecte al canal. "
+                        "¿Quieres que la mande a la Factoría?"
+                    ),
+                    factory_action="SKILL_REQUEST",
+                    confidence=1.0,
+                )
+                self._pending_intent_msg = message
+                return self._pending_intent.gap_response
             return (
                 "Por ahora no puedo procesar audio ni mensajes de voz. "
                 "Puedo responder mensajes de texto."
@@ -1029,7 +1116,7 @@ class AIAgent:
             status = result.get("user_status", "")
             if status:
                 self._last_public_topic = "factory"
-                return status
+                return self._localize_factory_status(status)
             return (
                 "La solicitud quedó identificada para revisión. "
                 "Todavía no queda activa en Telegram."

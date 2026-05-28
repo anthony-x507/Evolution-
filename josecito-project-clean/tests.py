@@ -373,7 +373,7 @@ class TestAIAgent(unittest.TestCase):
 
     def test_process_short_message(self):
         """Greeting should not depend on provider availability."""
-        result = self.agent.process_message("Hi")
+        result = self.agent.process_message("Hola")
         self.assertIn("MASTER", result)
         self.assertNotIn("LLM no configurado", result)
 
@@ -468,6 +468,81 @@ class TestAIAgent(unittest.TestCase):
         self.assertIn("Por ahora no puedo procesar audio", result)
         self.assertNotIn("But I am learning", result)
         self.assertNotIn("I only process", result)
+
+    def test_voice_activation_request_goes_to_factory_confirmation(self):
+        calls = []
+
+        def capability_cb(**kwargs):
+            calls.append(kwargs)
+            return {
+                "ok": True,
+                "user_status": (
+                    "The Factory finished its part, but the capability is still "
+                    "waiting for activation in the live channel."
+                ),
+            }
+
+        agent = agent_mod.AIAgent(language="es", capability_cb=capability_cb)
+
+        def fail_classifier(message):
+            raise AssertionError("voice activation should not depend on provider classification")
+
+        agent._classify_intent = fail_classifier
+
+        first = agent.process_message("Puedo activar la función de voz?")
+        second = agent.process_message("Sí")
+
+        self.assertIn("¿Quieres que la mande a la Factoría?", first)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["capability"], "stt_audio_input")
+        self.assertIn("La solicitud ya pasó por la Factoría", second)
+        self.assertNotIn("The Factory finished", second)
+
+    def test_human_voice_request_reaches_factory_without_provider(self):
+        calls = []
+
+        def capability_cb(**kwargs):
+            calls.append(kwargs)
+            return {
+                "ok": True,
+                "user_status": "La solicitud quedó registrada para seguimiento.",
+            }
+
+        agent = agent_mod.AIAgent(language="es", capability_cb=capability_cb)
+
+        def fail_classifier(message):
+            raise AssertionError("human voice request should be routed before provider classification")
+
+        agent._classify_intent = fail_classifier
+
+        first = agent.process_message("Quiero que me escuches")
+        second = agent.process_message("Sí")
+
+        self.assertIn("¿Quieres que la mande a la Factoría?", first)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["capability"], "stt_audio_input")
+        self.assertIn("seguimiento", second)
+
+    def test_language_shift_asks_before_switching(self):
+        agent = agent_mod.AIAgent(language="es")
+
+        first = agent.process_message("Hello, how are you?")
+        self.assertIn("Noté que escribiste en inglés", first)
+        self.assertEqual(agent._language, "es")
+
+        second = agent.process_message("Sí")
+        self.assertIn("Done. I will continue in English.", second)
+        self.assertEqual(agent._language, "en")
+
+    def test_language_shift_can_be_rejected(self):
+        agent = agent_mod.AIAgent(language="es")
+
+        first = agent.process_message("Can I speak English with you?")
+        second = agent.process_message("No")
+
+        self.assertIn("¿Quieres que cambie a inglés", first)
+        self.assertIn("Sigo en español", second)
+        self.assertEqual(agent._language, "es")
 
     def test_product_router_reports_factory_status(self):
         agent = agent_mod.AIAgent(
@@ -702,7 +777,7 @@ class TestTorreDeControl(unittest.TestCase):
         first = agent.process_message("Quiero que puedas recibir mis mensajes de voz")
         second = agent.process_message("sí")
 
-        self.assertIn("¿Quieres que la mande a revisión?", first)
+        self.assertIn("¿Quieres que la mande a la Factoría?", first)
         self.assertIn("La solicitud ya pasó por la Factoría", second)
         self.assertNotIn("SOLICITUD ENVIADA A LA FACTORÍA", second)
         self.assertNotIn("stt_processor", second)
