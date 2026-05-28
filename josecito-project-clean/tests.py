@@ -881,9 +881,42 @@ class TestTorreDeControl(unittest.TestCase):
         self.assertIn("user_status", result)
         self.assertEqual(result.get("status"), "factory_completed_pending_activation")
         self.assertIn("activation_missing", result)
-        self.assertIn("recibir mensajes de voz desde Telegram", result["activation_missing"])
+        self.assertIn(
+            "actualizar GatewayTelegram.poll_updates para reconocer message.voice y message.audio",
+            result["activation_missing"],
+        )
+        self.assertIn(
+            "usar getFile con file_id y descargar el archivo desde el endpoint de archivos de Telegram",
+            result["activation_missing"],
+        )
         self.assertIn("Falta completar", result["user_status"])
-        self.assertIn("transcribir", result["user_status"])
+        self.assertIn("GatewayTelegram.poll_updates", result["user_status"])
+        factory_ticket = self.tower._factory_manager.get_ticket(result["ticket_id"])
+        self.assertIsNotNone(factory_ticket)
+        soul = factory_ticket.payload.get("engineer_soul", "")
+        self.assertIn("Voice Input For Telegram", soul)
+        self.assertIn("message[\"voice\"]", soul)
+        self.assertIn("getFile", soul)
+        self.assertIn("telegram_voice_transcript", soul)
+
+    def test_factory_engineer_soul_documents_voice_telegram_contract(self):
+        soul_path = Path(__file__).resolve().parent / "master" / "factory" / "Soul.md"
+        soul = soul_path.read_text(encoding="utf-8")
+
+        required = [
+            "GatewayTelegram",
+            "message[\"voice\"]",
+            "message[\"audio\"]",
+            "getFile",
+            "file_path",
+            "private runtime temp directory",
+            "STT adapter",
+            "telegram_voice_transcript",
+            "privacy, safety, language, identity",
+            "final Telegram response",
+        ]
+        for term in required:
+            self.assertIn(term, soul)
 
     def test_onboarding_flow_initializes_agent_with_factory_callback(self):
         from digos_lib.onboarding import OnboardingFlow

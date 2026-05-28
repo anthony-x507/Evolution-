@@ -26,6 +26,7 @@ The foreman ensures every hammer hits true."
 
 from dataclasses import dataclass, field
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 import uuid
 
@@ -80,13 +81,32 @@ class FactoryEngineer(AgentBase):
     poll_interval_seconds: int = 5
     last_poll: Optional[datetime] = None
     _monitoring_active: bool = False
+    _soul_guidance: str = ""
 
     def __post_init__(self):
         super().__post_init__()
         self.name = "factory_engineer"
         self.role = "engineer"
         self.description = "Operational chief of the MASTER Factory"
-        self.set_mission("Keep the Factory operational, clean, and evolving")
+        self._soul_guidance = self._load_soul_guidance()
+        self.set_mission(
+            "Keep the Factory operational, clean, and evolving. "
+            "Follow master/factory/Soul.md for capability-specific contracts."
+        )
+
+    def _load_soul_guidance(self) -> str:
+        """Load the Engineer Soul document when present."""
+        path = Path(__file__).with_name("Soul.md")
+        try:
+            return path.read_text(encoding="utf-8")
+        except Exception:
+            return ""
+
+    def capability_guidance(self, capability_id: str) -> str:
+        """Return capability-specific guidance carried into Factory tickets."""
+        if capability_id == "stt_audio_input":
+            return self._soul_guidance
+        return ""
 
     # ── Superior Agent wiring ────────────────────────────────────────
 
@@ -130,6 +150,12 @@ class FactoryEngineer(AgentBase):
     ) -> Ticket:
         """Create a ticket and assign it a sequential number."""
         self._ticket_counter += 1
+        ticket_payload = dict(payload or {})
+        capability_id = str(ticket_payload.get("capability_id", ""))
+        guidance = self.capability_guidance(capability_id)
+        if guidance:
+            ticket_payload.setdefault("engineer_soul_source", "master/factory/Soul.md")
+            ticket_payload.setdefault("engineer_soul", guidance)
 
         ticket = Ticket(
             title=title,
@@ -138,7 +164,7 @@ class FactoryEngineer(AgentBase):
             priority=priority,
             created_by=self.name,
             ticket_number=self._ticket_counter,
-            payload=payload or {},
+            payload=ticket_payload,
         )
 
         self.all_tickets.append(ticket)
