@@ -215,9 +215,9 @@ class OnboardingFlow:
 
     def _show_banner(self):
         print_startup_banner(
-            system_name="DIGOS",
+            system_name="MASTER",
             tagline="Organized Home for Useful Intelligence",
-            welcome="Bienvenido. Vamos a configurar DIGOS.",
+            welcome="Bienvenido. Vamos a configurar MASTER.",
         )
 
     # ── STEP 1: LANGUAGE ──────────────────────────

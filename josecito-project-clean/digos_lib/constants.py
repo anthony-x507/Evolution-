@@ -29,15 +29,15 @@ VAULT_FILE = DIGOS_DIR / "vault.enc"
 
 LANGUAGES = {
     "1": {"name": "English",   "code": "en",
-          "welcome": "Welcome to DIGOS — Intelligent Agent System!"},
+          "welcome": "Welcome to MASTER — Intelligent Agent System!"},
     "2": {"name": "Español",   "code": "es",
-          "welcome": "¡Bienvenido a DIGOS — Sistema de Agentes Inteligentes!"},
+          "welcome": "¡Bienvenido a MASTER — Sistema de Agentes Inteligentes!"},
     "3": {"name": "Português", "code": "pt",
-          "welcome": "Bem-vindo ao DIGOS — Sistema de Agentes Inteligentes!"},
+          "welcome": "Bem-vindo ao MASTER — Sistema de Agentes Inteligentes!"},
     "4": {"name": "Français",  "code": "fr",
-          "welcome": "Bienvenue sur DIGOS — Système d'Agents Intelligents!"},
+          "welcome": "Bienvenue sur MASTER — Système d'Agents Intelligents!"},
     "5": {"name": "Deutsch",   "code": "de",
-          "welcome": "Willkommen bei DIGOS — Intelligentes Agentensystem!"},
+          "welcome": "Willkommen bei MASTER — Intelligentes Agentensystem!"},
 }
 
 # ─────────────────────────────────────────────

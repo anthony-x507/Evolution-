@@ -343,9 +343,10 @@ class TestTerminalPresentation(unittest.TestCase):
 
         banner = render_startup_banner(width=90, color=False)
 
-        self.assertIn("DIGOS", banner)
+        self.assertIn("MASTER", banner)
         self.assertIn("Organized Home for Useful Intelligence", banner)
-        self.assertIn("Vamos a configurar DIGOS", banner)
+        self.assertIn("Vamos a configurar MASTER", banner)
+        self.assertNotIn("DIGOS", banner)
         self.assertIn("/\\", banner)
 
     def test_startup_banner_does_not_expose_runtime_values(self):

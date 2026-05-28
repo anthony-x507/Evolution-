@@ -1,4 +1,4 @@
-"""Terminal presentation helpers for the DIGOS first-run experience."""
+"""Terminal presentation helpers for the MASTER first-run experience."""
 from __future__ import annotations
 
 import os
@@ -8,27 +8,33 @@ from typing import Iterable
 
 
 NINJA_ART = [
-    "              .-.",
-    "           __/___\\__          /",
-    "          /  _   _  \\        /",
-    "         |  /_\\ /_\\  |      /",
-    "          \\   ___   /      /",
-    "      _____`-.___.-'______/ ",
-    "     /  _   _  |||  _   _ \\",
-    "    /__/ \\_/ \\_|||_/ \\_/ \\__\\",
-    "          /    |||    \\",
-    "         /___/\\___/\\___\\",
-    "        /__/       \\__\\",
+    "                    .-.",
+    "             ___..-'   '-..___",
+    "          .-'       _|_       '-.",
+    "         /        .-___-.        \\",
+    "        |        /  ___  \\        |        /",
+    "        |        \\  \\_/  /        |       /",
+    "         \\        '-._.-'        /       /",
+    "          '._      __|||__     _.'______/ ",
+    "             '----'  |||  '----'",
+    "        _________    |||    _________",
+    "       /  _   _  \\___|||___/  _   _  \\",
+    "      /__/ \\_/ \\__\\  |||  /__/ \\_/ \\__\\",
+    "             /       |||       \\",
+    "            /___/\\___|||___/\\___\\",
+    "           /__/      |||      \\__\\",
+    "                    /|||\\",
+    "                   /_|||_\\",
 ]
 
 
-DIGOS_TITLE = [
-    r"██████╗  ██╗ ██████╗  ██████╗ ███████╗",
-    r"██╔══██╗ ██║██╔════╝ ██╔═══██╗██╔════╝",
-    r"██║  ██║ ██║██║  ███╗██║   ██║███████╗",
-    r"██║  ██║ ██║██║   ██║██║   ██║╚════██║",
-    r"██████╔╝ ██║╚██████╔╝╚██████╔╝███████║",
-    r"╚═════╝  ╚═╝ ╚═════╝  ╚═════╝ ╚══════╝",
+MASTER_TITLE = [
+    r"███╗   ███╗  █████╗  ███████╗████████╗███████╗██████╗",
+    r"████╗ ████║ ██╔══██╗ ██╔════╝╚══██╔══╝██╔════╝██╔══██╗",
+    r"██╔████╔██║ ███████║ ███████╗   ██║   █████╗  ██████╔╝",
+    r"██║╚██╔╝██║ ██╔══██║ ╚════██║   ██║   ██╔══╝  ██╔══██╗",
+    r"██║ ╚═╝ ██║ ██║  ██║ ███████║   ██║   ███████╗██║  ██║",
+    r"╚═╝     ╚═╝ ╚═╝  ╚═╝ ╚══════╝   ╚═╝   ╚══════╝╚═╝  ╚═╝",
 ]
 
 
@@ -56,9 +62,9 @@ def _color(text: str, code: str, enabled: bool) -> str:
 
 def render_startup_banner(
     *,
-    system_name: str = "DIGOS",
+    system_name: str = "MASTER",
     tagline: str = "Organized Home for Useful Intelligence",
-    welcome: str = "Welcome. Vamos a configurar DIGOS.",
+    welcome: str = "Bienvenido. Vamos a configurar MASTER.",
     width: int | None = None,
     color: bool | None = None,
 ) -> str:
@@ -71,7 +77,7 @@ def render_startup_banner(
     use_color = _supports_color() if color is None else color
     divider = "─" * min(42, resolved_width - 16)
 
-    title_lines = DIGOS_TITLE if system_name.upper() == "DIGOS" else [system_name.upper()]
+    title_lines = MASTER_TITLE
     title = _center(title_lines, resolved_width)
     ninja = _center(NINJA_ART, resolved_width)
 
