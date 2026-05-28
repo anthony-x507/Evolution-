@@ -69,8 +69,8 @@ INTENT_FAMILIES: Dict[str, IntentFamily] = {
                 description="User wants to send audio/voice right now (in this conversation)",
                 capability="stt_audio_input",
                 gap_response=(
-"🎤 For now I can only read and respond with text. "
-                "I do not process voice messages or audio yet."
+                    "Por ahora no puedo procesar audio ni mensajes de voz. "
+                    "Puedo responder mensajes de texto."
                 ),
             ),
             SubIntent(
@@ -78,14 +78,8 @@ INTENT_FAMILIES: Dict[str, IntentFamily] = {
                 description="User wants the system to GAIN the ability to receive audio/voice messages",
                 capability="stt_audio_input",
                 gap_response=(
-                    "🎤 Sounds like you want me to be able to hear you. "
-                    "I understand! Could you tell me more about what you need? "
-                    "Do you want to:\n"
-                    "  1. Send voice messages that I can read\n"
-                    "  2. Have a full conversation with me\n"
-                    "  3. Give me voice commands\n\n"
-                    "Once I understand exactly what you need, I can prepare "
-                    "a request for the Factory to build it."
+                    "Puedo dejar esa solicitud identificada para agregar mensajes de voz. "
+                    "Todavía no queda activa en Telegram."
                 ),
             ),
             SubIntent(
@@ -93,9 +87,8 @@ INTENT_FAMILIES: Dict[str, IntentFamily] = {
                 description="User wants the system to respond with voice/audio (TTS)",
                 capability="tts_audio_output",
                 gap_response=(
-"🔊 To respond with voice I need audio output capability (TTS). "
-                "I can prepare that request for review and send it to the Factory. "
-                "Do you want me to prepare it?"
+                    "Para responder con voz necesito una capacidad de audio que todavía "
+                    "no está activa. Puedo dejar esa solicitud identificada para revisión."
                 ),
             ),
             SubIntent(
@@ -103,12 +96,9 @@ INTENT_FAMILIES: Dict[str, IntentFamily] = {
                 description="User wants full bidirectional voice conversation (STT + TTS)",
                 capability="voice_full_duplex",
                 gap_response=(
-                    "🎤🔊 A full voice conversation sounds great! "
-                    "Let me clarify what you have in mind:\n"
-                    "  - Do you want me to SPEAK back to you? (voice output)\n"
-                    "  - Do you want to SEND me voice messages? (voice input)\n"
-                    "  - Or both?\n\n"
-                    "Tell me more and I'll prepare the right Factory request."
+                    "La conversación por voz todavía no está activa. "
+                    "Puedo dejar identificada la solicitud para agregar voz de entrada, "
+                    "voz de salida o ambas."
                 ),
             ),
             SubIntent(
@@ -116,9 +106,8 @@ INTENT_FAMILIES: Dict[str, IntentFamily] = {
                 description="User asks how to activate or set up voice features",
                 capability="voice_full_duplex",
                 gap_response=(
-"🎤 Voice features are not available to activate directly yet. "
-                "But I can prepare the request to add them to the system. "
-                "Do you want me to prepare the request for the Factory?"
+                    "La función de voz todavía no está disponible para activarse desde aquí. "
+                    "Puedo dejar esa solicitud identificada para revisión."
                 ),
             ),
             SubIntent(
@@ -126,9 +115,8 @@ INTENT_FAMILIES: Dict[str, IntentFamily] = {
                 description="User is frustrated or complaining about lack of voice support",
                 capability="stt_audio_input",
                 gap_response=(
-"🎤 I understand the frustration. For now I can only work with text, "
-                "but I can prepare the request to add voice input. "
-                "Do you want me to send it for review?"
+                    "Entiendo. Por ahora solo puedo trabajar con texto, "
+                    "pero puedo dejar identificada la solicitud para agregar voz."
                 ),
             ),
         ],
@@ -142,9 +130,8 @@ INTENT_FAMILIES: Dict[str, IntentFamily] = {
                 description="User wants the system to browse the web or open websites",
                 capability="web_browsing",
                 gap_response=(
-"🌐 To browse the internet I need web browsing capability. "
-                "I can prepare that request for review in the Factory. "
-                "Do you want me to prepare it?"
+                    "Ahora no tengo navegación web activa desde Telegram. "
+                    "Puedo dejar esa solicitud identificada para revisión."
                 ),
             ),
             SubIntent(
@@ -152,9 +139,8 @@ INTENT_FAMILIES: Dict[str, IntentFamily] = {
                 description="User wants the system to search the internet",
                 capability="web_search",
                 gap_response=(
-"🔍 To search the internet I need web search capability. "
-                "I can prepare that request for review in the Factory. "
-                "Do you want me to prepare it?"
+                    "Ahora no tengo búsqueda web activa desde Telegram. "
+                    "Puedo dejar esa solicitud identificada para revisión."
                 ),
             ),
             SubIntent(
@@ -162,9 +148,8 @@ INTENT_FAMILIES: Dict[str, IntentFamily] = {
                 description="User wants to fetch data from a URL or API",
                 capability="web_fetch",
                 gap_response=(
-"📡 To fetch data from the internet I need web fetching capability. "
-                "I can prepare that request for review in the Factory. "
-                "Do you want me to prepare it?"
+                    "Ahora no tengo lectura de páginas web activa desde Telegram. "
+                    "Puedo dejar esa solicitud identificada para revisión."
                 ),
             ),
         ],
@@ -242,7 +227,7 @@ AVAILABLE_CAPABILITIES = {
 
 # ── Classification Prompt ────────────────────────────────────────────
 
-CLASSIFICATION_SYSTEM_PROMPT = """You are an intent classifier for DIGOS. Your ONLY task is to classify the user's message into an intent family and sub-intent.
+CLASSIFICATION_SYSTEM_PROMPT = """You are an intent classifier for MASTER. Your ONLY task is to classify the user's message into an intent family and sub-intent.
 
 Respond with ONLY a JSON object. Nothing else. No markdown, no explanations.
 

@@ -1,6 +1,7 @@
 """DIGOS AIAgent Core — LLM interaction loop with tool calling + transparency."""
 import json
 import re
+import unicodedata
 from typing import Optional, Dict, List, Any, Callable
 from urllib.request import Request, urlopen
 from urllib.error import URLError
@@ -44,6 +45,8 @@ class AIAgent:
         rotation_cb: Optional[Callable] = None,
         creation_cb: Optional[Callable] = None,
         capability_cb: Optional[Callable] = None,
+        factory_status_cb: Optional[Callable] = None,
+        language: str = "es",
         max_iterations: int = 15,
     ):
         self._base_url = base_url.rstrip("/")
@@ -57,6 +60,8 @@ class AIAgent:
         self._rotation_cb = rotation_cb
         self._creation_cb = creation_cb
         self._capability_cb = capability_cb
+        self._factory_status_cb = factory_status_cb
+        self._language = language or "es"
         self._max_iterations = max_iterations
 
         # Conversation history
@@ -65,6 +70,7 @@ class AIAgent:
         self._pending_rotation: Optional[str] = None  # credential_type when user is mid-rotation
         self._pending_intent: Optional[IntentClassification] = None  # intent waiting for user confirmation
         self._pending_intent_msg: str = ""  # original message that triggered the intent
+        self._last_public_topic: str = ""
 
         # Security Gate
         self._gate = SecurityGate()
@@ -86,6 +92,172 @@ class AIAgent:
                 if question in msg_lower:
                     return answer
         return ""
+
+    @staticmethod
+    def _norm(text: str) -> str:
+        """Accent-insensitive lowercase text for routing."""
+        lowered = text.lower().strip()
+        deaccented = unicodedata.normalize("NFKD", lowered)
+        deaccented = "".join(ch for ch in deaccented if not unicodedata.combining(ch))
+        return re.sub(r"\s+", " ", deaccented)
+
+    def _remember_and_return(self, clean_msg: str, response: str, topic: str = "") -> str:
+        self._messages.append({"role": "user", "content": clean_msg})
+        self._messages.append({"role": "assistant", "content": response})
+        self._last_public_topic = topic or self._last_public_topic
+        return response
+
+    def _language_change_response(self, msg: str) -> str:
+        if any(term in msg for term in ["switch to espanol", "switch to español", "cambia a espanol", "cambia a español"]):
+            self._language = "es"
+            return "Listo. Voy a continuar en español."
+        if any(term in msg for term in ["switch to english", "cambia a ingles", "cambia a inglés"]):
+            self._language = "en"
+            return "Done. I will continue in English."
+        if "ingles" in msg or "english" in msg:
+            return "Sí. Podemos hablar en inglés. ¿Quieres que cambie a inglés ahora?"
+        if "espanol" in msg or "spanish" in msg:
+            return "Sí. Podemos hablar en español. ¿Quieres que siga en español?"
+        return ""
+
+    def _factory_status_response(self, msg: str) -> str:
+        status_terms = [
+            "mi herramienta esta lista", "mi herramienta esta", "herramienta esta lista",
+            "estado del ticket", "como va el ticket", "mi ticket", "la solicitud esta lista",
+            "ya termino", "esta terminado", "esta lista", "seguimiento",
+        ]
+        if not any(term in msg for term in status_terms):
+            return ""
+        if self._factory_status_cb:
+            try:
+                return self._factory_status_cb("") or ""
+            except Exception:
+                return ""
+        return (
+            "No veo el estado de una solicitud de herramienta en este momento. "
+            "Cuando la Factoría esté conectada, podré darte seguimiento aquí."
+        )
+
+    def _check_public_product_response(self, message: str) -> str:
+        """Deterministic user-facing answers before the provider."""
+        msg = self._norm(message)
+
+        if msg in {"?", "??", "???"}:
+            if self._last_public_topic == "factory":
+                return self._factory_status_response("mi herramienta esta lista") or (
+                    "¿Quieres que revise el estado de la solicitud de herramienta?"
+                )
+            return "¿Quieres que aclare mi respuesta anterior o que revise algo específico?"
+
+        if msg in {"hola", "buenas", "buenos dias", "buenas tardes", "buenas noches", "hello", "hi"}:
+            self._last_public_topic = "greeting"
+            return "Hola. Soy MASTER. ¿En qué puedo ayudarte hoy?"
+
+        language_response = self._language_change_response(msg)
+        if language_response:
+            self._last_public_topic = "language"
+            return language_response
+
+        factory_status = self._factory_status_response(msg)
+        if factory_status:
+            self._last_public_topic = "factory"
+            return factory_status
+
+        if any(term in msg for term in [
+            "como funciona tu sistema", "como funcionas", "explica tu sistema",
+            "como trabajas", "que pasa por dentro",
+        ]):
+            self._last_public_topic = "system"
+            return (
+                "Funciona de forma simple para ti: recibo tu mensaje, reviso si puedo "
+                "ayudarte con mis capacidades actuales, uso herramientas disponibles "
+                "cuando corresponde y te respondo por Telegram. Los detalles internos "
+                "se mantienen protegidos."
+            )
+
+        if any(term in msg for term in [
+            "que puedes hacer", "en que me puedes ayudar", "cuales son tus capacidades",
+            "que sabes hacer",
+        ]):
+            self._last_public_topic = "capability"
+            return (
+                "Puedo responder preguntas, organizar ideas, revisar texto, ayudarte a "
+                "preparar solicitudes de nuevas capacidades y mantener una conversación "
+                "clara dentro de mis capacidades actuales. Por ahora trabajo por texto en Telegram."
+            )
+
+        if "agente" in msg and any(term in msg for term in [
+            "otro agente", "mas agentes", "más agentes", "agente interno",
+            "la fabrica", "la factoria", "puedo tener",
+        ]):
+            self._last_public_topic = "factory"
+            return (
+                "La Factoría puede revisar solicitudes de nuevos agentes cuando el sistema "
+                "lo permita. Si quieres, dime qué agente necesitas y preparo la solicitud "
+                "sin prometer que quede instalado de inmediato."
+            )
+
+        if any(term in msg for term in ["que edad tienes", "cuantos anos tienes", "cuantos años tienes"]):
+            self._last_public_topic = "identity"
+            return "No tengo una edad fija porque soy una inteligencia artificial."
+
+        voice_terms = ["audio", "voz", "mensaje de voz", "escuchar", "oirme", "oírme", "microfono", "micrófono"]
+        if any(term in msg for term in voice_terms):
+            wants_tool = any(term in msg for term in [
+                "quiero", "necesito", "herramienta", "puedes pedir", "prepara",
+                "agrega", "agregar", "procesar mis mensajes", "recibas mis mensajes",
+            ])
+            self._last_public_topic = "factory" if wants_tool else "voice"
+            if wants_tool:
+                return ""
+            return (
+                "Por ahora no puedo procesar audio ni mensajes de voz. "
+                "Puedo responder mensajes de texto."
+            )
+
+        web_terms = ["buscar en internet", "busca en internet", "web", "panama.com", "panamá.com", "google", "pagina web"]
+        if any(term in msg for term in web_terms):
+            self._last_public_topic = "web"
+            return (
+                "Ahora no tengo búsqueda web activa desde Telegram. "
+                "Puedo responder con conocimiento general o dejar identificada una solicitud "
+                "para agregar búsqueda web."
+            )
+
+        return ""
+
+    def _sanitize_visible_response(self, response: str) -> str:
+        """Replace internal leakage with a product-safe answer."""
+        if not response:
+            return response
+
+        forbidden = [
+            "DIGOS", "Josecito", "GPS", "RED", "YELLOW", "GREEN",
+            "rojo", "amarillo", "verde", "knowledge/", "ACTIVE.md",
+            "ARCHITECTURE.md", "Dream Cycle", "AgentInfra", "Deep-Claw",
+            "digos_lib", "Torre de Control", "SafetyKendo", "Kendo",
+            "builder", "sandbox", "stt_audio_input_builder",
+            "Current GPS Status", "Reading file", "safety flags",
+            "SYSTEM NOTICE", "INTERNAL SAFETY REVIEW",
+            "no hay una fábrica", "no hay una factoria",
+        ]
+        if any(term.lower() in response.lower() for term in forbidden):
+            return (
+                "Soy MASTER. Para ti funciono de forma simple: recibo tu mensaje, "
+                "reviso si puedo ayudarte con mis capacidades actuales, uso herramientas "
+                "disponibles cuando corresponde y te respondo por Telegram. Los detalles "
+                "internos se mantienen protegidos."
+            )
+
+        if self._language == "es":
+            mixed_english = ["But I am learning", "I see you're", "Current GPS", "I'm DIGOS"]
+            if any(term.lower() in response.lower() for term in mixed_english):
+                return (
+                    "Por ahora solo puedo responder en español dentro de esta conversación. "
+                    "Dime qué necesitas y te ayudo."
+                )
+
+        return response
 
     # ── Credential Disclosure ────────────────────
 
@@ -478,9 +650,8 @@ class AIAgent:
         # No creation_cb available
         if not self._creation_cb:
             return (
-                "No tengo acceso a la Factoría de agentes internos. "
-                "El sistema no está completamente inicializado. "
-                "Usa `digos --status` para verificar el estado."
+                "Puedo dejar identificada la solicitud de un agente interno, "
+                "pero el flujo automático de creación no está activo ahora."
             )
 
         # Determine agent type
@@ -526,31 +697,17 @@ class AIAgent:
         # Format response
         if len(created) == 1:
             r = created[0]
-            mode_label = "🤝 colaborativo" if mode == "collaborative" else "🔒 aislado"
             return (
-                f"✅ AGENTE INTERNO CREADO\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"  Nombre:  {r['agent_name']}\n"
-                f"  Tipo:    {r['agent_type']}\n"
-                f"  Modo:    {mode_label}\n"
-                f"  Ticket:  #{r['ticket_id']}\n"
-                f"\n"
-                f"La Torre le ha inyectado:\n"
-                f"  🧭 GPS + 🧠 SelfAwareness + 📋 Work + 🔥 SafetyKendo"
+                f"La solicitud del agente interno quedó procesada. "
+                f"Nombre asignado: {r['agent_name']}. "
+                f"Queda bajo seguimiento del sistema."
             )
 
-        mode_label = "🤝 colaborativo" if mode == "collaborative" else "🔒 aislado"
         names = ", ".join(r['agent_name'] for r in created)
         return (
-            f"✅ {len(created)} AGENTES INTERNOS CREADOS\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"  Nombres: {names}\n"
-            f"  Tipo:    {created[0]['agent_type']}\n"
-            f"  Modo:    {mode_label}\n"
-            f"  Ticket:  #{created[0]['ticket_id']}\n"
-            f"\n"
-            f"La Torre les ha inyectado:\n"
-            f"  🧭 GPS + 🧠 SelfAwareness + 📋 Work + 🔥 SafetyKendo"
+            f"Las solicitudes de agentes internos quedaron procesadas. "
+            f"Nombres asignados: {names}. "
+            f"Quedan bajo seguimiento del sistema."
         )
 
     def process_message(self, user_message: str) -> str:
@@ -584,9 +741,7 @@ class AIAgent:
         # ── Identity Check: respond without LLM if asked who you are ──
         identity_response = self._check_identity_question(clean_msg)
         if identity_response:
-            self._messages.append({"role": "user", "content": clean_msg})
-            self._messages.append({"role": "assistant", "content": identity_response})
-            return identity_response
+            return self._remember_and_return(clean_msg, identity_response, "identity")
 
         # ── Credential Rotation: user provides a NEW credential ──
         # Use the original message for one-step rotation so SecurityGate
@@ -606,6 +761,11 @@ class AIAgent:
             self._messages.append({"role": "user", "content": clean_msg})
             self._messages.append({"role": "assistant", "content": "🔑 [Credencial entregada al usuario — ver respuesta anterior]"})
             return credential_response
+
+        # ── Product Router: deterministic answers that must not depend on provider ──
+        public_response = self._check_public_product_response(clean_msg)
+        if public_response:
+            return self._remember_and_return(clean_msg, public_response)
 
         # ── Internal Agent Creation: user asks to create builders/auditors/reviewers ──
         creation_response = self._check_internal_agent_request(clean_msg)
@@ -674,6 +834,8 @@ class AIAgent:
                         from security import CREDENTIAL_PATTERN
                         safe_response = CREDENTIAL_PATTERN.sub("***REDACTED***", assistant_text)
                         self._assistant_cb(f"⚠️ Credenciales redactadas de la respuesta")
+                    safe_response = self._sanitize_visible_response(safe_response)
+                    self._messages[-1]["content"] = safe_response
                     return safe_response
                 else:
                     return "No pude procesar tu mensaje."
@@ -703,7 +865,7 @@ class AIAgent:
                 if self._approval_cb:
                     approved = self._approval_cb(name, args)
                     if not approved:
-                        result = f"⛔ Operacion no permitida por la Torre de Control: {name}"
+                        result = f"⛔ Operación no permitida por seguridad: {name}"
                         self._messages.append({
                             "role": "tool",
                             "tool_call_id": tc["id"],
@@ -864,41 +1026,16 @@ class AIAgent:
             return intent.gap_response + f"\n\n❌ Error al preparar la solicitud: {e}"
 
         if result.get("ok"):
-            ticket_id = result.get("ticket_id", "?")
-            ticket_number = result.get("ticket_number", ticket_id)
-            agent_name = result.get("agent_name", "")
-            tool_name = result.get("tool_name", intent.capability)
-            sandbox_id = result.get("sandbox_id", "")
-            revision = result.get("revision", "")
-            audit_ticket_id = result.get("audit_ticket_id", "")
-
-            lines = [
-                f"✅ SOLICITUD ENVIADA A LA FACTORÍA",
-                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
-                f"📦 Capacidad: {intent.capability}",
-                f"🏷️  Skill:     {tool_name}",
-                f"📋 Ticket:    #{ticket_number}",
-            ]
-            if agent_name:
-                lines.append(f"🤖 Builder:   {agent_name}")
-            if sandbox_id:
-                lines.append(f"🧪 Sandbox:   #{sandbox_id}")
-            if revision:
-                lines.append(f"📌 Revisión:  v{revision}")
-            if audit_ticket_id and audit_ticket_id != ticket_id:
-                lines.append(f"📋 Auditoría: #{audit_ticket_id}")
-            lines.extend([
-                "",
-                "🏭 Pipeline de la Factoría:",
-                "   🔐 Caja Segura → ⚡ Eficiencia → 🧬 Evolución",
-                "   → 🤖 Builder → 🔍 Auditor → ✅ Reviewer → 🚀 Release",
-                "",
-                "Te avisaré cuando la capacidad esté lista. "
-                "Mientras tanto, sigamos con lo que necesites.",
-            ])
-            return "\n".join(lines)
+            status = result.get("user_status", "")
+            if status:
+                self._last_public_topic = "factory"
+                return status
+            return (
+                "La solicitud quedó identificada para revisión. "
+                "Todavía no queda activa en Telegram."
+            )
         else:
-            return f"❌ {result.get('message', 'No se pudo preparar la solicitud.')}"
+            return result.get("user_status") or "No pude completar esa solicitud todavía."
 
     # ── Intent Classification (Camino B — híbrido) ────────────
 

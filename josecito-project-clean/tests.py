@@ -372,10 +372,10 @@ class TestAIAgent(unittest.TestCase):
         self.assertIsNotNone(self.agent._gate)
 
     def test_process_short_message(self):
-        """Short messages should process without issues (without real LLM)."""
+        """Greeting should not depend on provider availability."""
         result = self.agent.process_message("Hi")
-        # Without LLM configured, should give connection error
-        self.assertIn("LLM no configurado", result)
+        self.assertIn("MASTER", result)
+        self.assertNotIn("LLM no configurado", result)
 
     def test_reset_conversation(self):
         self.agent._messages.append({"role": "user", "content": "test"})
@@ -450,6 +450,48 @@ class TestAIAgent(unittest.TestCase):
         self.assertIn("Se muestra porque la pediste", result)
         self.assertNotIn(api_key, json.dumps(agent._messages))
 
+    def test_product_router_hides_internal_architecture(self):
+        agent = agent_mod.AIAgent(language="es")
+
+        result = agent.process_message("Cómo funciona tu sistema?")
+
+        self.assertIn("Funciona de forma simple", result)
+        forbidden = ["GPS", "RED", "YELLOW", "GREEN", "knowledge", "ACTIVE.md", "DIGOS", "Josecito"]
+        for term in forbidden:
+            self.assertNotIn(term, result)
+
+    def test_product_router_keeps_spanish_for_voice(self):
+        agent = agent_mod.AIAgent(language="es")
+
+        result = agent.process_message("Puedo mandarte un mensaje de voz?")
+
+        self.assertIn("Por ahora no puedo procesar audio", result)
+        self.assertNotIn("But I am learning", result)
+        self.assertNotIn("I only process", result)
+
+    def test_product_router_reports_factory_status(self):
+        agent = agent_mod.AIAgent(
+            language="es",
+            factory_status_cb=lambda capability="": "La solicitud está en proceso. La Factoría la tiene marcada.",
+        )
+
+        result = agent.process_message("Mi herramienta está lista?")
+
+        self.assertIn("La solicitud está en proceso", result)
+        self.assertNotIn("builder", result.lower())
+        self.assertNotIn("sandbox", result.lower())
+
+    def test_sanitizer_blocks_provider_internal_leakage(self):
+        agent = agent_mod.AIAgent(language="es")
+
+        result = agent._sanitize_visible_response(
+            "Current GPS Status: Reading file knowledge/ACTIVE.md. RED/YELLOW/GREEN."
+        )
+
+        self.assertIn("Soy MASTER", result)
+        self.assertNotIn("GPS", result)
+        self.assertNotIn("ACTIVE.md", result)
+
 
 class TestTorreDeControl(unittest.TestCase):
     """Tests for TorreDeControl (without starting daemon)."""
@@ -469,6 +511,10 @@ class TestTorreDeControl(unittest.TestCase):
         prompt = self.tower._build_agent_prompt()
         self.assertIsInstance(prompt, str)
         self.assertTrue(len(prompt) > 0)
+        self.assertIn("MASTER", prompt)
+        forbidden = ["DIGOS", "Josecito", "GPS", "RED", "YELLOW", "GREEN", "ACTIVE.md", "Dream Cycle"]
+        for term in forbidden:
+            self.assertNotIn(term, prompt)
 
     def test_read_file_allowlist_blocks_prefix_siblings(self):
         desktop = TEST_DIR / "Desktop"
@@ -509,11 +555,26 @@ class TestTorreDeControl(unittest.TestCase):
         self.assertEqual(result.get("tool_name"), "stt_processor")
         self.assertIn("builder", result.get("agent_name", ""))
         self.assertTrue(result.get("audit_ticket_id"))
+        self.assertIn("user_status", result)
+        self.assertEqual(result.get("status"), "factory_completed_pending_activation")
 
     def test_onboarding_flow_initializes_agent_with_factory_callback(self):
         from digos_lib.onboarding import OnboardingFlow
 
-        prompts = iter(["2", "4", "1"])  # Espanol, DeepSeek, Telegram
+        from digos_lib import constants as digos_constants
+        from digos_lib import core_vault as digos_core_vault
+        for vault_path in {
+            digos.VAULT_FILE,
+            digos_constants.VAULT_FILE,
+            digos_core_vault.VAULT_FILE,
+            TEST_DIR / ".digos" / "vault.enc",
+        }:
+            if vault_path.exists():
+                vault_path.unlink()
+        digos.CajaSeguraInfo._invalidate_cache()
+        digos_core_vault.CajaSeguraInfo._invalidate_cache()
+
+        prompts = iter(["2", "4", "1", "s"])  # Espanol, DeepSeek, Telegram, continue-if-needed
         secrets = iter([
             "sk-test-onboarding-1234567890",
             "123456789:ABCdefGHIjklMNOpqrSTUvwxYZabc12345",
@@ -524,10 +585,15 @@ class TestTorreDeControl(unittest.TestCase):
         orig_getpass = getpass.getpass
         orig_provider = OnboardingFlow._test_provider
         orig_telegram = OnboardingFlow._test_telegram
+        orig_detect_sources = adoption_mod.AdoptionEngine.detect_sources
         output = io.StringIO()
 
         def fake_input(prompt=""):
-            value = next(prompts)
+            try:
+                value = next(prompts)
+            except StopIteration:
+                lowered = prompt.lower()
+                value = "s" if "continu" in lowered or "(s/n)" in lowered else "1"
             transcript.append((prompt, value))
             return value
 
@@ -547,6 +613,7 @@ class TestTorreDeControl(unittest.TestCase):
                 True,
                 "Bot 'Digos Test' (@digos_test_bot) conectado.",
             )
+            adoption_mod.AdoptionEngine.detect_sources = lambda self: []
 
             flow = OnboardingFlow(self.tower)
             with contextlib.redirect_stdout(output):
@@ -579,10 +646,20 @@ class TestTorreDeControl(unittest.TestCase):
             getpass.getpass = orig_getpass
             OnboardingFlow._test_provider = orig_provider
             OnboardingFlow._test_telegram = orig_telegram
+            adoption_mod.AdoptionEngine.detect_sources = orig_detect_sources
 
     def test_agent_confirmation_routes_to_embedded_factory_end_to_end(self):
         from digos_lib.intent_classifier import IntentClassification
 
+        self.tower.lang = "es"
+        self.tower.state["language"] = "es"
+        digos.CajaSeguraInfo.write_slot("principal", {
+            "provider_id": "4",
+            "provider_name": "DeepSeek",
+            "api_key": "sk-test-agent-factory-route",
+            "gateway_token": "123456789:ABCdefGHIjklMNOpqrSTUvwxYZabc12345",
+            "model": "deepseek-chat",
+        })
         self.tower._init_agent()
         agent = self.tower._agent
         self.assertIsNotNone(agent)
@@ -605,9 +682,11 @@ class TestTorreDeControl(unittest.TestCase):
         second = agent.process_message("sí")
 
         self.assertIn("¿Quieres que la mande a revisión?", first)
-        self.assertIn("SOLICITUD ENVIADA A LA FACTORÍA", second)
-        self.assertIn("stt_processor", second)
-        self.assertIn("stt_audio_input_builder", second)
+        self.assertIn("La solicitud ya pasó por la Factoría", second)
+        self.assertNotIn("SOLICITUD ENVIADA A LA FACTORÍA", second)
+        self.assertNotIn("stt_processor", second)
+        self.assertNotIn("stt_audio_input_builder", second)
+        self.assertNotIn("Sandbox", second)
         self.assertIsNotNone(self.tower._factory_manager)
 
 

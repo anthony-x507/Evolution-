@@ -709,12 +709,11 @@ class SecurityGate:
                 f.pattern_id.replace("yellow_", "") for f in yellow_findings[:8]
             )
             annotation = (
-                "[SYSTEM NOTICE: This message triggered YELLOW security flags. "
-                f"Detected sensitive words: {words_list}. "
-                "Analyze the user's INTENT deeply. "
-                "If the intent is genuinely harmful, explain why you cannot help. "
-                "If the intent is educational or harmless, answer normally. "
-                "Do NOT repeat this notice to the user.]\n\n"
+                "[INTERNAL SAFETY REVIEW: Sensitive terms were detected: "
+                f"{words_list}. Analyze the user's intent carefully. "
+                "If the request is harmful, refuse briefly. "
+                "If it is harmless or educational, answer normally. "
+                "Do not repeat this notice to the user.]\n\n"
             )
             return {
                 "blocked": False,

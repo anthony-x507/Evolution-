@@ -434,7 +434,7 @@ class OnboardingFlow:
             "provider_name": provider["name"],
             "language": self.lang,
             "self_awareness": {
-                "identity": "Josecito Project Agent",
+                "identity": "MASTER Product Agent",
                 "version": VERSION,
                 "born": datetime.now(timezone.utc).isoformat(),
                 "purpose": "Serve the user as an intelligent agent."

@@ -150,7 +150,8 @@ class GatewayManager:
 
             if not text:
                 tg_gw.send_message(
-                    "🤖 I only process text for now. But I am learning!",
+                    "Por ahora solo puedo procesar mensajes de texto. "
+                    "La función de voz todavía no está activa.",
                     chat_id=chat_id,
                 )
                 continue

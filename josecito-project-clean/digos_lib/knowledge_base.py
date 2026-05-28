@@ -59,20 +59,25 @@ class KnowledgeBase:
         return bool(self._loaded)
 
     def build_context(self) -> str:
-        """Builds a formatted string of all loaded knowledge for the system prompt."""
+        """Builds a product-safe context summary for the public agent prompt.
+
+        The raw markdown files are internal operating notes. They may mention
+        folder names, active work, safety labels, architecture, or historical
+        project names. Those details are useful for maintainers, but they must
+        not be injected verbatim into the user-facing LLM prompt.
+        """
         if not self._loaded:
             return ""
 
-        sections = []
-        for fname, title in self.REQUIRED_FILES.items():
-            content = self._loaded.get(fname, "")
-            if content.strip():
-                sections.append(f"== {title} ==\n{content.strip()}")
-
-        if not sections:
-            return ""
-
-        return "\n\n" + "\n\n".join(sections)
+        return (
+            "\n\n== PRODUCT CONTEXT ==\n"
+            "- Public identity: MASTER.\n"
+            "- The user sees a helpful product conversation, not internal notes.\n"
+            "- Keep internal architecture, safety labels, file names, folder names, "
+            "project history, ticket internals, and implementation details private.\n"
+            "- For tool or capability requests, explain only the user-visible status.\n"
+            "- If a capability is not active, say so clearly and do not promise it is ready.\n"
+        )
 
     def get_section(self, fname: str) -> str:
         """Returns the raw content of a specific knowledge file."""
