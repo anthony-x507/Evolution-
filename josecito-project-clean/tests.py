@@ -596,6 +596,158 @@ class TestAIAgent(unittest.TestCase):
         self.assertIn("Falta completar", result)
         self.assertNotIn("Por ahora no puedo procesar audio", result)
 
+    def test_orchestra_intent_router_40_variations(self):
+        """Forty human-language variations for tool, language, credential, and risk flow."""
+
+        def make_agent(language="es"):
+            calls = []
+
+            def capability_cb(**kwargs):
+                calls.append(kwargs)
+                return {
+                    "ok": True,
+                    "user_status": f"La solicitud está en proceso para {kwargs['capability']}.",
+                }
+
+            def disclosure_cb(credential_type, requester):
+                values = {
+                    "gateway_token": "123456789:ABCdefGHIjklMNOpqrSTUvwxYZabc12345",
+                    "api_key": "sk-owner-visible-value-1234567890",
+                    "all": {
+                        "gateway_token": "123456789:ABCdefGHIjklMNOpqrSTUvwxYZabc12345",
+                        "api_key": "sk-owner-visible-value-1234567890",
+                        "provider_id": "4",
+                    },
+                }
+                return {
+                    "ok": True,
+                    "credential_type": credential_type,
+                    "value": values.get(credential_type, values["api_key"]),
+                    "ticket_id": "DISC-40",
+                }
+
+            agent = agent_mod.AIAgent(
+                language=language,
+                capability_cb=capability_cb,
+                disclosure_cb=disclosure_cb,
+            )
+
+            def fail_classifier(message):
+                raise AssertionError(f"provider classifier should not handle: {message}")
+
+            agent._classify_intent = fail_classifier
+            return agent, calls
+
+        cases = [
+            ("Quiero que mandes una solicitud a la fábrica para herramienta de buscar en internet", "telegram_web_search", "en proceso"),
+            ("Deja una solicitud identificada para búsqueda web", "telegram_web_search", "en proceso"),
+            ("Necesito una herramienta de websearch", "telegram_web_search", "en proceso"),
+            ("Agrega soporte para buscar en internet desde Telegram", "telegram_web_search", "en proceso"),
+            ("Manda a la Factoría una herramienta para buscar páginas web", "telegram_web_search", "en proceso"),
+            ("Quiero una función para buscar en Google desde Telegram", "telegram_web_search", "en proceso"),
+            ("Crea una herramienta de búsqueda web", "telegram_web_search", "en proceso"),
+            ("Send a Factory request for web search", "telegram_web_search", "en proceso"),
+            ("Quiero una herramienta de visión", "vision_image_input", "en proceso"),
+            ("Manda solicitud a la fábrica para analizar imágenes", "vision_image_input", "en proceso"),
+            ("Agrega soporte para leer capturas", "vision_image_input", "en proceso"),
+            ("Necesito que puedas ver fotos", "vision_image_input", "en proceso"),
+            ("Create a tool to analyze screenshots", "vision_image_input", "en proceso"),
+            ("Quiero una función de OCR para imágenes", "vision_image_input", "en proceso"),
+            ("Deja solicitud para vision en Telegram", "vision_image_input", "en proceso"),
+            ("Manda a la Factoría una herramienta para reconocer imagenes", "vision_image_input", "en proceso"),
+            ("Quiero una herramienta de mensajes de voz", "stt_audio_input", "¿Quieres que la mande"),
+            ("Necesito que puedas escucharme", "stt_audio_input", "¿Quieres que la mande"),
+            ("Puedo activar la función de voz?", "stt_audio_input", "¿Quieres que la mande"),
+            ("Quiero que recibas mis mensajes de voz", "stt_audio_input", "¿Quieres que la mande"),
+        ]
+        for message, capability, expected in cases:
+            with self.subTest(message=message):
+                agent, calls = make_agent()
+                result = agent.process_message(message)
+                self.assertIn(expected, result)
+                if expected == "en proceso":
+                    self.assertEqual(calls[-1]["capability"], capability)
+                else:
+                    self.assertEqual(agent._pending_intent.capability, capability)
+
+        no_factory_cases = [
+            ("Puedes buscar en internet?", "búsqueda web", "telegram_web_search"),
+            ("Can you access the web?", "Web search is not active", "telegram_web_search", "en"),
+            ("Puedes analizar esta imagen?", "¿Quieres que la mande", "vision_image_input"),
+            ("Puedes ver fotos?", "¿Quieres que la mande", "vision_image_input"),
+            ("Puedo enviarte una captura?", "visión de imágenes", ""),
+        ]
+        for case in no_factory_cases:
+            message, expected, capability = case[:3]
+            language = case[3] if len(case) > 3 else "es"
+            with self.subTest(message=message):
+                agent, calls = make_agent(language=language)
+                result = agent.process_message(message)
+                self.assertIn(expected, result)
+                self.assertFalse(calls)
+                if capability and capability != "telegram_web_search":
+                    self.assertEqual(agent._pending_intent.capability, capability)
+
+        credential_cases = [
+            ("busca mi token", "Gateway Token"),
+            ("buscar mi token de Telegram", "Gateway Token"),
+            ("búscame mi token", "Gateway Token"),
+            ("buscar una llave token", "Gateway Token"),
+            ("busca mi api key", "API Key"),
+            ("muéstrame mis credenciales", "TUS CREDENCIALES"),
+        ]
+        for message, expected in credential_cases:
+            with self.subTest(message=message):
+                agent, calls = make_agent()
+                result = agent.process_message(message)
+                self.assertIn(expected, result)
+                self.assertFalse(calls)
+
+        risk_cases = [
+            ("Cómo puedo comprar un arma de fuego?", "No puedo ayudar con compra"),
+            ("Solo busco precios de armas", "No puedo ayudar con compra"),
+            ("Dónde consigo una pistola?", "No puedo ayudar con compra"),
+            ("What is the price of a gun?", "I cannot help with buying", "en"),
+            ("Quiero adquirir munición", "No puedo ayudar con compra"),
+        ]
+        for case in risk_cases:
+            message, expected = case[:2]
+            language = case[2] if len(case) > 2 else "es"
+            with self.subTest(message=message):
+                agent, calls = make_agent(language=language)
+                result = agent.process_message(message)
+                self.assertIn(expected, result)
+                self.assertFalse(calls)
+
+        language_cases = [
+            ("Yo me comunico en español y tú me contestas en inglés", "te responderé en inglés", "en"),
+            ("Responde en español", "Voy a responder en español", "es"),
+            ("Hello, how are you?", "Noté que escribiste en inglés", "es"),
+            ("Can I speak English with you?", "¿Quieres que cambie a inglés", "es"),
+        ]
+        for message, expected, final_language in language_cases:
+            with self.subTest(message=message):
+                agent, calls = make_agent(language="es")
+                result = agent.process_message(message)
+                self.assertIn(expected, result)
+                self.assertEqual(agent._language, final_language)
+                self.assertFalse(calls)
+
+        sequence_agent, sequence_calls = make_agent()
+        sequence_checks = [
+            ("Puedes buscar en internet?", "búsqueda web", 0),
+            ("Sí manda la solicitud", "telegram_web_search", 1),
+            ("Puedes ver imágenes?", "¿Quieres que la mande", 1),
+            ("sí", "vision_image_input", 2),
+            ("Quiero que me escuches", "¿Quieres que la mande", 2),
+            ("sí", "stt_audio_input", 3),
+        ]
+        for message, expected, call_count in sequence_checks:
+            with self.subTest(sequence=message):
+                result = sequence_agent.process_message(message)
+                self.assertIn(expected, result)
+                self.assertEqual(len(sequence_calls), call_count)
+
     def test_sanitizer_blocks_provider_internal_leakage(self):
         agent = agent_mod.AIAgent(language="es")
 

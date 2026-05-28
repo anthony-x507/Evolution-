@@ -72,6 +72,7 @@ class AIAgent:
         self._pending_intent_msg: str = ""  # original message that triggered the intent
         self._pending_language: Optional[str] = None  # language change waiting for user confirmation
         self._last_public_topic: str = ""
+        self._risk_history: List[dict] = []
 
         # Security Gate
         self._gate = SecurityGate()
@@ -107,6 +108,139 @@ class AIAgent:
         self._messages.append({"role": "assistant", "content": response})
         self._last_public_topic = topic or self._last_public_topic
         return response
+
+    @staticmethod
+    def _semantic_message(message: str) -> str:
+        """Strip internal safety annotations before deterministic routing."""
+        marker = "[INTERNAL SAFETY REVIEW:"
+        if message.startswith(marker) and "\n\n" in message:
+            return message.split("\n\n", 1)[1]
+        return message
+
+    def _say(self, es: str, en: str) -> str:
+        """Return product copy in the active response language."""
+        return en if self._language == "en" else es
+
+    def _make_capability_intent(
+        self,
+        *,
+        family: str,
+        sub_intent_id: str,
+        description: str,
+        capability: str,
+        gap_response: str,
+    ) -> IntentClassification:
+        return IntentClassification(
+            matched=True,
+            family=family,
+            family_description=family,
+            sub_intent_id=sub_intent_id,
+            sub_intent_description=description,
+            capability=capability,
+            has_gap=True,
+            gap_response=gap_response,
+            factory_action="SKILL_REQUEST",
+            confidence=1.0,
+        )
+
+    def _wants_factory_request(self, msg: str) -> bool:
+        """Detect explicit human intent to request/build/activate a capability."""
+        request_terms = [
+            "solicitud", "fabrica", "fábrica",
+            "factoria", "factoría", "herramienta", "tool", "agrega",
+            "agregar", "crear", "crea", "activar", "activa", "habilitar",
+            "necesito que puedas", "quiero que puedas", "quiero una funcion",
+            "quiero una función", "i need a tool", "create a tool",
+            "send a request", "factory request", "add support",
+        ]
+        return any(term in msg for term in request_terms)
+
+    def _queue_or_send_capability_request(
+        self,
+        *,
+        intent: IntentClassification,
+        original_message: str,
+        explicit: bool = False,
+    ) -> str:
+        """Confirm or route a capability request through Factory."""
+        self._last_public_topic = "factory"
+        if explicit:
+            return self._handle_confirmed_intent(intent, original_message)
+        self._pending_intent = intent
+        self._pending_intent_msg = original_message
+        return intent.gap_response
+
+    def _risk_category(self, msg: str) -> str:
+        weapon_terms = [
+            "arma", "armas", "pistola", "rifle", "escopeta", "municion",
+            "munición", "bala", "firearm", "gun", "weapon", "ammo",
+        ]
+        drug_terms = ["droga", "cocaina", "cocaína", "fentanilo", "heroin", "heroin"]
+        cyber_terms = ["hackear", "robar cuenta", "phishing", "malware", "ransomware"]
+        violence_terms = ["matar", "asesinar", "hacer daño", "attack", "kill"]
+        if any(term in msg for term in weapon_terms):
+            return "weapon"
+        if any(term in msg for term in drug_terms):
+            return "drug"
+        if any(term in msg for term in cyber_terms):
+            return "cyber"
+        if any(term in msg for term in violence_terms):
+            return "violence"
+        if msg in {"solo busco precios", "solo quiero precios", "precios"}:
+            recent = [r for r in self._risk_history[-3:] if r.get("category") == "weapon"]
+            if recent:
+                return "weapon"
+        return ""
+
+    def _record_risk_signal(self, raw_message: str, gate_result: dict) -> None:
+        msg = self._norm(raw_message)
+        category = self._risk_category(msg)
+        level = ""
+        if gate_result.get("blocked"):
+            level = "red"
+        elif gate_result.get("yellow_flagged") or category:
+            level = "yellow"
+        if not level and not category:
+            return
+        self._risk_history.append({
+            "level": level or "yellow",
+            "category": category or "sensitive",
+            "sample": msg[:120],
+        })
+        self._risk_history = self._risk_history[-20:]
+
+    def _self_aware_risk_response(self, raw_message: str, gate_result: dict) -> str:
+        """Use pattern evidence to respond safely without exposing risk internals."""
+        msg = self._norm(raw_message)
+        category = self._risk_category(msg)
+        if not category:
+            return ""
+
+        recent_same = [
+            r for r in self._risk_history[-5:]
+            if r.get("category") == category and r.get("level") in {"yellow", "red"}
+        ]
+        acquisition_terms = [
+            "comprar", "compra", "precio", "precios", "conseguir",
+            "donde consigo", "dónde consigo", "adquirir", "venta",
+            "buy", "price", "prices", "where can i get", "purchase",
+        ]
+        if category == "weapon" and any(term in msg for term in acquisition_terms):
+            return self._say(
+                "No puedo ayudar con compra, precios o adquisición de armas. "
+                "Sí puedo hablar de seguridad general o recomendar consultar fuentes oficiales.",
+                "I cannot help with buying, pricing, or acquiring weapons. "
+                "I can discuss general safety or suggest checking official sources.",
+            )
+        if len(recent_same) >= 3 and category in {"weapon", "drug", "cyber", "violence"}:
+            return self._say(
+                "Veo que el tema puede entrar en un área delicada. Para mantenerlo seguro, "
+                "puedo ayudar con información general, prevención o rutas oficiales, pero no "
+                "con instrucciones operativas ni adquisición.",
+                "This topic may be sensitive. I can help with general information, prevention, "
+                "or official routes, but not with operational instructions or acquisition.",
+            )
+        return ""
 
     def _detect_language_shift(self, msg: str) -> str:
         """Return a likely message language when it differs from the active one."""
@@ -150,6 +284,24 @@ class AIAgent:
         if any(term in msg for term in ["switch to english", "cambia a ingles", "cambia a inglés"]):
             self._language = "en"
             return "Done. I will continue in English."
+        if any(term in msg for term in [
+            "tu me contestas en ingles", "tú me contestas en ingles",
+            "tu me respondes en ingles", "tú me respondes en ingles",
+            "contesta en ingles", "responde en ingles", "respond in english",
+            "answer me in english",
+        ]):
+            self._language = "en"
+            self._pending_language = None
+            return "Listo. Puedes escribirme en español; te responderé en inglés."
+        if any(term in msg for term in [
+            "tu me contestas en espanol", "tú me contestas en español",
+            "tu me respondes en espanol", "tú me respondes en español",
+            "contesta en espanol", "contesta en español", "responde en espanol",
+            "responde en español", "respond in spanish", "answer me in spanish",
+        ]):
+            self._language = "es"
+            self._pending_language = None
+            return "Listo. Voy a responder en español."
         if "ingles" in msg or "english" in msg:
             self._pending_language = "en"
             return "Sí. Podemos hablar en inglés. ¿Quieres que cambie a inglés ahora?"
@@ -235,6 +387,47 @@ class AIAgent:
             self._last_public_topic = "language"
             return language_response
 
+        confirmation = self._check_intent_confirmation(msg)
+        if confirmation == "yes" and self._last_public_topic in {"web", "vision", "voice"}:
+            if self._last_public_topic == "web":
+                intent = self._make_capability_intent(
+                    family="WEB",
+                    sub_intent_id="WEB_SEARCH_CAPABILITY_REQUEST",
+                    description="User confirmed a web search capability request",
+                    capability="telegram_web_search",
+                    gap_response="",
+                )
+                return self._queue_or_send_capability_request(
+                    intent=intent,
+                    original_message="Solicitud de búsqueda web desde Telegram",
+                    explicit=True,
+                )
+            if self._last_public_topic == "vision":
+                intent = self._make_capability_intent(
+                    family="VISION",
+                    sub_intent_id="VISION_IMAGE_CAPABILITY_REQUEST",
+                    description="User confirmed an image vision capability request",
+                    capability="vision_image_input",
+                    gap_response="",
+                )
+                return self._queue_or_send_capability_request(
+                    intent=intent,
+                    original_message="Solicitud de visión de imágenes desde Telegram",
+                    explicit=True,
+                )
+            intent = self._make_capability_intent(
+                family="VOICE",
+                sub_intent_id="VOICE_INPUT_CAPABILITY_REQUEST",
+                description="User confirmed a voice input capability request",
+                capability="stt_audio_input",
+                gap_response="",
+            )
+            return self._queue_or_send_capability_request(
+                intent=intent,
+                original_message="Solicitud de mensajes de voz desde Telegram",
+                explicit=True,
+            )
+
         if msg in {"hola", "buenas", "buenos dias", "buenas tardes", "buenas noches", "hello", "hi"}:
             self._last_public_topic = "greeting"
             return "Hola. Soy MASTER. ¿En qué puedo ayudarte hoy?"
@@ -318,13 +511,80 @@ class AIAgent:
                 "Puedo responder mensajes de texto."
             )
 
-        web_terms = ["buscar en internet", "busca en internet", "web", "panama.com", "panamá.com", "google", "pagina web"]
+        vision_terms = [
+            "vision", "visión", "imagen", "imagenes", "imágenes", "foto",
+            "captura", "screenshot", "ver imagen", "analizar imagen",
+            "leer imagen", "reconocer imagen", "ocr",
+        ]
+        if any(term in msg for term in vision_terms):
+            wants_tool = self._wants_factory_request(msg) or any(term in msg for term in [
+                "puedes ver", "puedes analizar", "puedes leer", "can you see",
+                "can you analyze", "need vision", "image support",
+            ])
+            if wants_tool:
+                intent = self._make_capability_intent(
+                    family="VISION",
+                    sub_intent_id="VISION_IMAGE_CAPABILITY_REQUEST",
+                    description="User wants image/vision capability in Telegram",
+                    capability="vision_image_input",
+                    gap_response=self._say(
+                        "Puedo preparar una solicitud para agregar visión de imágenes a MASTER. "
+                        "Todavía no queda activa hasta que la Factoría la revise y se conecte al canal. "
+                        "¿Quieres que la mande a la Factoría?",
+                        "I can prepare a request to add image vision to MASTER. "
+                        "It will not be active until the Factory reviews it and connects it to the channel. "
+                        "Do you want me to send that request to the Factory?",
+                    ),
+                )
+                explicit = self._wants_factory_request(msg)
+                return self._queue_or_send_capability_request(
+                    intent=intent,
+                    original_message=message,
+                    explicit=explicit,
+                )
+            self._last_public_topic = "vision"
+            return self._say(
+                "Ahora no tengo visión de imágenes activa desde Telegram. "
+                "Si necesitas esa capacidad, puedo preparar una solicitud para la Factoría.",
+                "Image vision is not active from Telegram right now. "
+                "If you need that capability, I can prepare a Factory request.",
+            )
+
+        web_terms = [
+            "buscar en internet", "busca en internet", "web", "panama.com",
+            "panamá.com", "google", "pagina web", "página web", "websearch",
+            "web search", "internet", "busqueda web", "búsqueda web",
+            "access the web", "search the web",
+        ]
         if any(term in msg for term in web_terms):
+            wants_tool = self._wants_factory_request(msg)
+            if wants_tool:
+                intent = self._make_capability_intent(
+                    family="WEB",
+                    sub_intent_id="WEB_SEARCH_CAPABILITY_REQUEST",
+                    description="User wants web search capability in Telegram",
+                    capability="telegram_web_search",
+                    gap_response=self._say(
+                        "Puedo preparar una solicitud para agregar búsqueda web desde Telegram. "
+                        "Todavía no queda activa hasta que la Factoría la revise y la conecte al canal. "
+                        "¿Quieres que la mande a la Factoría?",
+                        "I can prepare a request to add web search from Telegram. "
+                        "It will not be active until the Factory reviews it and connects it to the channel. "
+                        "Do you want me to send that request to the Factory?",
+                    ),
+                )
+                return self._queue_or_send_capability_request(
+                    intent=intent,
+                    original_message=message,
+                    explicit=True,
+                )
             self._last_public_topic = "web"
-            return (
+            return self._say(
                 "Ahora no tengo búsqueda web activa desde Telegram. "
-                "Puedo responder con conocimiento general o dejar identificada una solicitud "
-                "para agregar búsqueda web."
+                "Puedo responder con conocimiento general o preparar una solicitud "
+                "para agregar búsqueda web.",
+                "Web search is not active from Telegram right now. "
+                "I can answer with general knowledge or prepare a request to add web search.",
             )
 
         return ""
@@ -376,6 +636,10 @@ class AIAgent:
         "ver credenciales", "mostrar credenciales", "dame credenciales",
         "api key que tengo", "token que tengo", "proveedor que uso",
         "cual es mi proveedor", "qué proveedor", "que proveedor",
+        "busca mi token", "buscar mi token", "búscame mi token",
+        "buscame mi token", "encuentra mi token", "consigue mi token",
+        "busca mi api", "buscar mi api", "busca mi llave", "buscar mi llave",
+        "llave token", "mi llave token", "buscar una llave token",
     ]
 
     CREDENTIAL_REQUEST_PATTERNS_EN = [
@@ -817,10 +1081,16 @@ class AIAgent:
         """Processes a user message. Returns the final response."""
         # ── Input Gate: check message before processing ──
         gate_result = self._gate.check_input(user_message)
+        self._record_risk_signal(user_message, gate_result)
         if gate_result["blocked"]:
             return gate_result["response"]
 
         clean_msg = gate_result["clean_message"]
+        semantic_msg = self._semantic_message(clean_msg)
+
+        risk_response = self._self_aware_risk_response(user_message, gate_result)
+        if risk_response:
+            return self._remember_and_return(semantic_msg, risk_response, "safety")
 
         # ── Pending Rotation: user is mid-rotation (two-step flow) ──
         if self._pending_rotation:
@@ -842,9 +1112,9 @@ class AIAgent:
                     return response
 
         # ── Identity Check: respond without LLM if asked who you are ──
-        identity_response = self._check_identity_question(clean_msg)
+        identity_response = self._check_identity_question(semantic_msg)
         if identity_response:
-            return self._remember_and_return(clean_msg, identity_response, "identity")
+            return self._remember_and_return(semantic_msg, identity_response, "identity")
 
         # ── Credential Rotation: user provides a NEW credential ──
         # Use the original message for one-step rotation so SecurityGate
@@ -856,59 +1126,59 @@ class AIAgent:
             return rotation_response
 
         # ── Credential Disclosure: user asks for THEIR credentials ──
-        credential_response = self._check_credential_request(clean_msg)
+        credential_response = self._check_credential_request(semantic_msg)
         if credential_response:
             # ⚠️ NO append the real credential to _messages history
             # (it would leak to the LLM provider on the next call)
             # Instead, store a redacted record
-            self._messages.append({"role": "user", "content": clean_msg})
+            self._messages.append({"role": "user", "content": semantic_msg})
             self._messages.append({"role": "assistant", "content": "🔑 [Credencial entregada al usuario — ver respuesta anterior]"})
             return credential_response
 
         # ── Product Router: deterministic answers that must not depend on provider ──
-        public_response = self._check_public_product_response(clean_msg)
+        public_response = self._check_public_product_response(semantic_msg)
         if public_response:
-            return self._remember_and_return(clean_msg, public_response)
+            return self._remember_and_return(semantic_msg, public_response)
 
         # ── Internal Agent Creation: user asks to create builders/auditors/reviewers ──
-        creation_response = self._check_internal_agent_request(clean_msg)
+        creation_response = self._check_internal_agent_request(semantic_msg)
         if creation_response:
-            self._messages.append({"role": "user", "content": clean_msg})
+            self._messages.append({"role": "user", "content": semantic_msg})
             self._messages.append({"role": "assistant", "content": creation_response})
             return creation_response
 
         # ── Intent Confirmation Check: user said "sí"/"dale" to a pending capability request ──
         if self._pending_intent is not None:
-            confirmation = self._check_intent_confirmation(clean_msg)
+            confirmation = self._check_intent_confirmation(semantic_msg)
             if confirmation == "yes":
                 pending = self._pending_intent
                 original = self._pending_intent_msg
                 self._pending_intent = None
                 self._pending_intent_msg = ""
                 response = self._handle_confirmed_intent(pending, original)
-                self._messages.append({"role": "user", "content": clean_msg})
+                self._messages.append({"role": "user", "content": semantic_msg})
                 self._messages.append({"role": "assistant", "content": response})
                 return response
             elif confirmation == "no":
                 self._pending_intent = None
                 self._pending_intent_msg = ""
                 response = "Entendido. Cuando quieras agregar esa capacidad, solo dímelo."
-                self._messages.append({"role": "user", "content": clean_msg})
+                self._messages.append({"role": "user", "content": semantic_msg})
                 self._messages.append({"role": "assistant", "content": response})
                 return response
             # else: ambiguous — let it fall through to normal processing
 
         # ── Camino B: Intent Classification (natural language → capability gap) ──
-        intent = self._classify_intent(clean_msg)
+        intent = self._classify_intent(semantic_msg)
         if intent.matched and intent.has_gap:
             # Capability gap detected — user wants something we can't do yet.
             # Only set pending_intent if there's a factory_action (SKILL_REQUEST).
             # For info-only responses (e.g., VOICE_INPUT_NOW), just show the message.
             if intent.factory_action:
                 self._pending_intent = intent
-                self._pending_intent_msg = clean_msg
+                self._pending_intent_msg = semantic_msg
             full_response = intent.gap_response
-            self._messages.append({"role": "user", "content": clean_msg})
+            self._messages.append({"role": "user", "content": semantic_msg})
             self._messages.append({"role": "assistant", "content": full_response})
             return full_response
 

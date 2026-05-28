@@ -592,6 +592,30 @@ CAPABILITY_SKILL_MAP: Dict[str, CapabilitySkillDefinition] = {
         ],
         tool_name="web_searcher",
     ),
+    "telegram_web_search": CapabilitySkillDefinition(
+        skill_name="telegram_web_search",
+        description="Búsqueda web desde Telegram bajo gobierno MASTER",
+        target_capabilities=[
+            "receive_web_search_request_from_telegram",
+            "classify_safe_search_intent",
+            "execute_web_search_when_allowed",
+            "summarize_sources_for_telegram",
+            "refuse_unsafe_searches",
+        ],
+        target_limitations=[
+            "requires_live_channel_web_policy",
+            "must_not_search_for_unsafe_acquisition",
+            "must_keep_source_attribution",
+        ],
+        activation_requirements=[
+            "conectar solicitudes de búsqueda web al canal de Telegram",
+            "validar intención segura antes de buscar",
+            "ejecutar búsqueda con proveedor permitido",
+            "filtrar resultados antes de responder al usuario",
+            "validar el flujo completo con una búsqueda permitida y una bloqueada",
+        ],
+        tool_name="telegram_web_search",
+    ),
     "web_fetch": CapabilitySkillDefinition(
         skill_name="data_fetcher",
         description="Fetch de datos: obtener datos de URLs y APIs externas",
@@ -605,6 +629,31 @@ CAPABILITY_SKILL_MAP: Dict[str, CapabilitySkillDefinition] = {
             "rate_limited",
         ],
         tool_name="data_fetcher",
+    ),
+    # ── VISION ──
+    "vision_image_input": CapabilitySkillDefinition(
+        skill_name="image_vision",
+        description="Visión de imágenes: recibir imágenes/capturas desde Telegram y convertirlas en contexto seguro",
+        target_capabilities=[
+            "receive_images_from_telegram",
+            "extract_image_context",
+            "support_screenshot_analysis",
+            "support_document_image_reading",
+            "route_vision_result_to_agent",
+        ],
+        target_limitations=[
+            "requires_vision_model_or_ocr_provider",
+            "must_not_store_private_images_unnecessarily",
+            "image_quality_affects_accuracy",
+        ],
+        activation_requirements=[
+            "recibir imágenes y capturas desde Telegram",
+            "descargar el archivo visual de forma segura",
+            "analizar la imagen con OCR o modelo de visión",
+            "pasar el resumen visual al agente como contexto gobernado",
+            "validar privacidad y respuestas antes de marcarlo activo",
+        ],
+        tool_name="image_vision",
     ),
     # ── NEW_TOOL (generic) ──
     "custom_tool": CapabilitySkillDefinition(
