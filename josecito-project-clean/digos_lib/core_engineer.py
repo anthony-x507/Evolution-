@@ -39,6 +39,67 @@ class SystemEngineer:
         cleaned = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(profile or "system")).strip("._")
         return cleaned or "system"
 
+    @staticmethod
+    def _capability_procedure_steps() -> List[dict]:
+        """Mandatory procedure attached to every capability ticket."""
+        return [
+            {
+                "id": "1_read_full_ticket",
+                "label": "Read the full ticket, original request, family, sub-intent, notes, and checklist.",
+            },
+            {
+                "id": "2_classify_and_confirm_scope",
+                "label": "Confirm whether the request is voice, web, vision, credential, agent, or another capability.",
+            },
+            {
+                "id": "3_inspect_existing_resources",
+                "label": "Check whether the adapter, skill, gateway, profile config, or provider already exists.",
+            },
+            {
+                "id": "4_build_or_connect_missing_links",
+                "label": "Build missing pieces or connect existing resources to the requested live path.",
+            },
+            {
+                "id": "5_wire_governance_and_channel",
+                "label": "Route the capability through MASTER governance and the requested channel.",
+            },
+            {
+                "id": "6_run_fake_local_validation",
+                "label": "Run fake/local validation and record evidence.",
+            },
+            {
+                "id": "7_run_live_path_validation",
+                "label": "Run live-path validation when the request is for Telegram or another live channel.",
+            },
+            {
+                "id": "8_close_or_return_with_evidence",
+                "label": "Close only if validation passes; otherwise keep open with missing link and next action.",
+            },
+        ]
+
+    @staticmethod
+    def _capability_pipeline_template() -> dict:
+        """REGISTER -> BUILD -> VALIDATE -> ACTIVATE state machine."""
+        return {
+            "current": "REGISTER",
+            "checkpoints": {
+                "REGISTER": "pending",
+                "BUILD": "pending",
+                "VALIDATE": "pending",
+                "ACTIVATE": "pending",
+            },
+            "history": [],
+        }
+
+    @staticmethod
+    def _pipeline_event(stage: str, state: str, note: str = "") -> dict:
+        return {
+            "at": datetime.now(timezone.utc).isoformat(),
+            "stage": stage,
+            "state": state,
+            "note": note,
+        }
+
     def _ensure_mailbox(self, profile: str):
         self._mailbox_dir(profile).mkdir(parents=True, exist_ok=True)
 
@@ -144,6 +205,55 @@ class SystemEngineer:
         self._save_ticket(profile, tid, ticket)
         return True
 
+    def advance_capability_pipeline(
+        self,
+        profile: str,
+        tid: str,
+        stage: str,
+        state: str,
+        *,
+        note: str = "",
+        evidence: Optional[List[str]] = None,
+        missing: Optional[List[str]] = None,
+        next_action: str = "",
+    ) -> bool:
+        """Move a capability ticket through REGISTER -> BUILD -> VALIDATE -> ACTIVATE."""
+        ticket = self._load_ticket(profile, tid)
+        if not ticket:
+            return False
+        stage = str(stage).upper()
+        state = str(state).lower()
+        allowed = {"REGISTER", "BUILD", "VALIDATE", "ACTIVATE"}
+        if stage not in allowed:
+            return False
+        if stage == "ACTIVATE" and state == "done" and not ticket.get("validation_passed"):
+            ticket.setdefault("notes", []).append({
+                "text": "Activation blocked: validation has not passed.",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            })
+            self._save_ticket(profile, tid, ticket)
+            return False
+
+        pipeline = ticket.setdefault("capability_pipeline", self._capability_pipeline_template())
+        checkpoints = pipeline.setdefault("checkpoints", {})
+        for checkpoint in ("REGISTER", "BUILD", "VALIDATE", "ACTIVATE"):
+            checkpoints.setdefault(checkpoint, "pending")
+        checkpoints[stage] = state
+        pipeline["current"] = stage
+        pipeline.setdefault("history", []).append(self._pipeline_event(stage, state, note))
+        pipeline["history"] = pipeline["history"][-30:]
+
+        ticket["pipeline_stage"] = stage
+        ticket["pipeline_status"] = state
+        if evidence:
+            ticket.setdefault("pipeline_evidence", []).extend(str(item) for item in evidence if str(item).strip())
+        if missing:
+            ticket["pipeline_missing"] = [str(item) for item in missing if str(item).strip()]
+        if next_action:
+            ticket["pipeline_next_action"] = next_action
+        self._save_ticket(profile, tid, ticket)
+        return True
+
     def mark_instructions_reviewed(self, profile: str, tid: str, instructions: List[str]) -> bool:
         """Record that the Engineer received and reviewed the full ticket instructions."""
         ticket = self._load_ticket(profile, tid)
@@ -153,6 +263,19 @@ class SystemEngineer:
         ticket["instructions_reviewed"] = True
         ticket["instructions_reviewed_at"] = datetime.now(timezone.utc).isoformat()
         ticket["instruction_manifest"] = manifest
+        status = ticket.setdefault("procedure_step_status", {})
+        status["1_read_full_ticket"] = "done"
+        status["2_classify_and_confirm_scope"] = "done"
+        ticket["current_procedure_step"] = "3_inspect_existing_resources"
+        pipeline = ticket.setdefault("capability_pipeline", self._capability_pipeline_template())
+        checkpoints = pipeline.setdefault("checkpoints", {})
+        checkpoints["REGISTER"] = "done"
+        pipeline["current"] = "BUILD"
+        pipeline.setdefault("history", []).append(
+            self._pipeline_event("REGISTER", "done", "Full instructions reviewed.")
+        )
+        ticket["pipeline_stage"] = "BUILD"
+        ticket["pipeline_status"] = "ready"
         ticket.setdefault("notes", []).append({
             "text": f"Engineer reviewed full instruction manifest ({len(manifest)} item(s)).",
             "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -176,6 +299,26 @@ class SystemEngineer:
         ticket["tool_tested"] = True
         ticket["validation_passed"] = bool(passed)
         ticket["closure_allowed"] = bool(passed)
+        status = ticket.setdefault("procedure_step_status", {})
+        status["6_run_fake_local_validation"] = "done" if passed else "failed"
+        status["7_run_live_path_validation"] = "done" if passed else "failed"
+        status["8_close_or_return_with_evidence"] = "ready_to_close" if passed else "return_open"
+        ticket["current_procedure_step"] = "ready_to_close" if passed else "4_build_or_connect_missing_links"
+        pipeline = ticket.setdefault("capability_pipeline", self._capability_pipeline_template())
+        checkpoints = pipeline.setdefault("checkpoints", {})
+        checkpoints["BUILD"] = "done"
+        checkpoints["VALIDATE"] = "done" if passed else "failed"
+        checkpoints["ACTIVATE"] = "pending" if passed else "blocked"
+        pipeline["current"] = "ACTIVATE" if passed else "VALIDATE"
+        pipeline.setdefault("history", []).append(
+            self._pipeline_event(
+                "VALIDATE",
+                "done" if passed else "failed",
+                "Validation passed." if passed else "Validation failed; activation blocked.",
+            )
+        )
+        ticket["pipeline_stage"] = "ACTIVATE" if passed else "VALIDATE"
+        ticket["pipeline_status"] = "validated" if passed else "pending_validation"
         ticket.setdefault("validation_evidence", []).append({
             "passed": bool(passed),
             "items": clean_evidence,
@@ -213,6 +356,15 @@ class SystemEngineer:
                 self._save_ticket(profile, tid, ticket)
                 self.log.warn("engineer", f"Ticket #{tid} no puede cerrar: {', '.join(missing)}")
                 return False
+            pipeline = ticket.setdefault("capability_pipeline", self._capability_pipeline_template())
+            checkpoints = pipeline.setdefault("checkpoints", {})
+            checkpoints["ACTIVATE"] = "done"
+            pipeline["current"] = "ACTIVATE"
+            pipeline.setdefault("history", []).append(
+                self._pipeline_event("ACTIVATE", "done", "Ticket closed after validation.")
+            )
+            ticket["pipeline_stage"] = "ACTIVATE"
+            ticket["pipeline_status"] = "active"
         ticket["status"] = "closed"; ticket["resolution"] = resolution
         ticket["closed_at"] = datetime.now(timezone.utc).isoformat()
         self._save_ticket(profile, tid, ticket)
@@ -712,6 +864,17 @@ class SystemEngineer:
                 "must_read_all_instructions": True,
                 "must_test_tool_before_delivery": True,
                 "must_keep_ticket_open_until_validation_passes": True,
+            }
+            ticket["capability_pipeline"] = self._capability_pipeline_template()
+            ticket["capability_pipeline"]["history"].append(
+                self._pipeline_event("REGISTER", "created", "Capability request ticket created.")
+            )
+            ticket["pipeline_stage"] = "REGISTER"
+            ticket["pipeline_status"] = "created"
+            ticket["required_procedure_steps"] = self._capability_procedure_steps()
+            ticket["current_procedure_step"] = "1_read_full_ticket"
+            ticket["procedure_step_status"] = {
+                step["id"]: "pending" for step in ticket["required_procedure_steps"]
             }
             ticket["instruction_manifest"] = [
                 str(item) for item in (instructions or []) if str(item).strip()

@@ -59,6 +59,8 @@ class FactoryStatusStore:
         responsibilities: Optional[dict[str, str]] = None,
         activation_requirements: Optional[list[str]] = None,
         activation_missing: Optional[list[str]] = None,
+        pipeline_stage: str = "",
+        pipeline_checkpoints: Optional[dict[str, str]] = None,
         next_step: str = "",
         note: str = "",
     ) -> dict[str, Any]:
@@ -89,6 +91,7 @@ class FactoryStatusStore:
             "active": bool(active),
             "validation_required": not bool(active),
             "closure_allowed": bool(active),
+            "pipeline_stage": pipeline_stage or record.get("pipeline_stage", ""),
             "updated_at": now,
         })
         if user_message:
@@ -101,6 +104,8 @@ class FactoryStatusStore:
             record["activation_missing"] = list(activation_missing)
         elif active:
             record["activation_missing"] = []
+        if pipeline_checkpoints is not None:
+            record["pipeline_checkpoints"] = dict(pipeline_checkpoints)
         if next_step:
             record["next_step"] = next_step
 
@@ -176,7 +181,7 @@ class FactoryStatusStore:
         if language != "es":
             if active:
                 return "The requested capability is active."
-            if status == "factory_completed_pending_activation":
+            if status in {"factory_completed_pending_activation", "pending_validation"}:
                 return (
                     "The request is still open. The Factory advanced the capability, "
                     f"but it is not active in Telegram yet. {_missing_text_en()} "
@@ -186,7 +191,7 @@ class FactoryStatusStore:
 
         if active:
             return "La capacidad solicitada ya está activa."
-        if status == "factory_completed_pending_activation":
+        if status in {"factory_completed_pending_activation", "pending_validation"}:
             return (
                 "La solicitud sigue abierta. La Factoría avanzó la capacidad, pero "
                 f"todavía no está activa en Telegram. {_missing_text_es()} "

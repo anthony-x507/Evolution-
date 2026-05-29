@@ -969,6 +969,7 @@ class TorreDeControl:
                 responsibilities=responsibilities,
                 activation_requirements=[],
                 activation_missing=[],
+                pipeline_stage="REGISTER",
                 note="Capability identified without an automatic Factory definition.",
             )
             result["user_status"] = self._factory_status.public_summary(capability, language=self._active_language())
@@ -993,6 +994,13 @@ class TorreDeControl:
                     "No activation checklist was provided. Keep this ticket open until manual validation passes."
                 ],
             )
+            self._engineer.advance_capability_pipeline(
+                audit_profile,
+                audit_ticket_id,
+                "BUILD",
+                "pending",
+                note="Waiting for Factory build stage.",
+            )
         self._factory_status.upsert_capability(
             capability,
             family=family,
@@ -1004,6 +1012,13 @@ class TorreDeControl:
             responsibilities=responsibilities,
             activation_requirements=activation_requirements,
             activation_missing=activation_requirements,
+            pipeline_stage="REGISTER",
+            pipeline_checkpoints={
+                "REGISTER": "done",
+                "BUILD": "pending",
+                "VALIDATE": "pending",
+                "ACTIVATE": "pending",
+            },
             next_step=activation_next_step,
             note="Capability request registered by the engineer.",
         )
@@ -1030,6 +1045,7 @@ class TorreDeControl:
                 responsibilities=responsibilities,
                 activation_requirements=activation_requirements,
                 activation_missing=activation_requirements,
+                pipeline_stage="REGISTER",
                 next_step=activation_next_step,
                 note="Factory unavailable.",
             )
@@ -1056,6 +1072,13 @@ class TorreDeControl:
             responsibilities=responsibilities,
             activation_requirements=activation_requirements,
             activation_missing=activation_requirements,
+            pipeline_stage="BUILD",
+            pipeline_checkpoints={
+                "REGISTER": "done",
+                "BUILD": "in_progress",
+                "VALIDATE": "pending",
+                "ACTIVATE": "pending",
+            },
             next_step=activation_next_step,
             note="Factory is processing the request.",
         )
@@ -1076,6 +1099,15 @@ class TorreDeControl:
                 self._engineer.add_note(audit_profile, ticket_id,
                     f"Factory error: {e}")
                 self._engineer.update_status(audit_profile, ticket_id, "open")
+                self._engineer.advance_capability_pipeline(
+                    audit_profile,
+                    ticket_id,
+                    "BUILD",
+                    "failed",
+                    note=f"Factory error: {e}",
+                    missing=[str(e)],
+                    next_action="Fix Factory build failure and retry this same ticket.",
+                )
                 self._engineer.add_note(audit_profile, ticket_id,
                     "Ticket remains open with failure evidence for another pass.")
             self._factory_status.upsert_capability(
@@ -1089,6 +1121,7 @@ class TorreDeControl:
                 responsibilities=responsibilities,
                 activation_requirements=activation_requirements,
                 activation_missing=activation_requirements,
+                pipeline_stage="BUILD",
                 next_step=activation_next_step,
                 note=f"Factory error: {e}",
             )
@@ -1105,6 +1138,15 @@ class TorreDeControl:
                 self._engineer.add_note(audit_profile, ticket_id,
                     "Factory returned None — no handler for this request")
                 self._engineer.update_status(audit_profile, ticket_id, "open")
+                self._engineer.advance_capability_pipeline(
+                    audit_profile,
+                    ticket_id,
+                    "BUILD",
+                    "failed",
+                    note="Factory returned no handler.",
+                    missing=["Factory returned no result for this capability."],
+                    next_action="Define a Factory handler or capability skill definition, then retry this same ticket.",
+                )
                 self._engineer.add_note(audit_profile, ticket_id,
                     "Ticket remains open because no Factory handler completed it.")
             self._factory_status.upsert_capability(
@@ -1118,6 +1160,7 @@ class TorreDeControl:
                 responsibilities=responsibilities,
                 activation_requirements=activation_requirements,
                 activation_missing=activation_requirements,
+                pipeline_stage="BUILD",
                 next_step=activation_next_step,
                 note="Factory returned no result.",
             )
@@ -1136,7 +1179,7 @@ class TorreDeControl:
         factory_ok = bool(factory_result.get("ok", False))
         is_active = factory_ok and (tool_name in AVAILABLE_CAPABILITIES or capability in AVAILABLE_CAPABILITIES)
         status = "active" if is_active else (
-            "factory_completed_pending_activation" if factory_ok else "failed"
+            "pending_validation" if factory_ok else "failed"
         )
         responsibilities = dict(responsibilities)
         if factory_result.get("agent_name"):
@@ -1144,6 +1187,13 @@ class TorreDeControl:
 
         if ticket_id:
             if factory_ok and is_active:
+                self._engineer.advance_capability_pipeline(
+                    audit_profile,
+                    ticket_id,
+                    "BUILD",
+                    "done",
+                    note="Factory build completed.",
+                )
                 self._engineer.add_validation_evidence(
                     audit_profile,
                     ticket_id,
@@ -1153,6 +1203,13 @@ class TorreDeControl:
                     ],
                     passed=True,
                 )
+                self._engineer.advance_capability_pipeline(
+                    audit_profile,
+                    ticket_id,
+                    "ACTIVATE",
+                    "done",
+                    note="Capability active in the requested runtime path.",
+                )
                 self._engineer.add_note(audit_profile, ticket_id,
                     f"Factory processed and validated active capability: {capability}")
                 self._engineer.close_ticket(audit_profile, ticket_id,
@@ -1161,7 +1218,14 @@ class TorreDeControl:
                 self._log.info("torre",
                     f"Ticket #{ticket_id} closed: Factory validated {capability}")
             elif factory_ok:
-                self._engineer.update_status(audit_profile, ticket_id, "in_progress")
+                self._engineer.update_status(audit_profile, ticket_id, "pending_validation")
+                self._engineer.advance_capability_pipeline(
+                    audit_profile,
+                    ticket_id,
+                    "BUILD",
+                    "done",
+                    note="Factory build completed; validation gate is next.",
+                )
                 self._engineer.add_validation_evidence(
                     audit_profile,
                     ticket_id,
@@ -1172,25 +1236,27 @@ class TorreDeControl:
                     passed=False,
                 )
                 self._engineer.add_note(audit_profile, ticket_id,
-                    "Factory processed the request, but runtime activation and "
-                    "end-to-end validation are still pending. Ticket remains open.")
+                    "Factory processed the request, but VALIDATE did not pass. "
+                    "Runtime activation and end-to-end validation are still pending. "
+                    "Ticket remains open at pending_validation.")
                 self._log.info("torre",
                     f"Ticket #{ticket_id} remains open: {capability} pending validation")
             else:
                 self._engineer.add_note(audit_profile, ticket_id,
                     f"Factory failed: {factory_result.get('message', 'unknown error')}")
                 self._engineer.update_status(audit_profile, ticket_id, "open")
-                self._engineer.add_validation_evidence(
+                self._engineer.advance_capability_pipeline(
                     audit_profile,
                     ticket_id,
-                    [
-                        "Factory did not complete the capability request.",
-                        factory_result.get("message", "unknown error"),
-                    ],
-                    passed=False,
+                    "BUILD",
+                    "failed",
+                    note=f"Factory failed: {factory_result.get('message', 'unknown error')}",
+                    missing=[factory_result.get("message", "unknown error")],
+                    next_action="Fix Factory build failure and retry this same ticket.",
                 )
                 self._engineer.add_note(audit_profile, ticket_id,
-                    "Returned to the mailbox with failure details; the ticket stays open.")
+                    "Returned to the mailbox with failure details. Validation did not run "
+                    "because BUILD failed; the ticket stays open.")
                 self._log.warn("torre",
                     f"Ticket #{ticket_id} returned open with failure: {capability}")
 
@@ -1209,16 +1275,30 @@ class TorreDeControl:
             responsibilities=responsibilities,
             activation_requirements=activation_requirements,
             activation_missing=[] if is_active else activation_requirements,
+            pipeline_stage="ACTIVATE" if is_active else ("VALIDATE" if factory_ok else "BUILD"),
+            pipeline_checkpoints={
+                "REGISTER": "done",
+                "BUILD": "done" if factory_ok else "failed",
+                "VALIDATE": "done" if is_active else ("failed" if factory_ok else "pending"),
+                "ACTIVATE": "done" if is_active else ("blocked" if factory_ok else "pending"),
+            },
             next_step="" if is_active else activation_next_step,
             note=(
                 "Factory completed and capability is active."
                 if is_active
-                else "Factory completed its part; runtime activation is still pending."
+                else "Factory completed its part; VALIDATE did not pass and runtime activation is still pending."
             ),
         )
         factory_result["active"] = is_active
         factory_result["status"] = status
-        factory_result["audit_ticket_status"] = "closed" if is_active else ("in_progress" if factory_ok else "open")
+        factory_result["audit_ticket_status"] = "closed" if is_active else ("pending_validation" if factory_ok else "open")
+        factory_result["pipeline_stage"] = "ACTIVATE" if is_active else ("VALIDATE" if factory_ok else "BUILD")
+        factory_result["pipeline_checkpoints"] = {
+            "REGISTER": "done",
+            "BUILD": "done" if factory_ok else "failed",
+            "VALIDATE": "done" if is_active else ("failed" if factory_ok else "pending"),
+            "ACTIVATE": "done" if is_active else ("blocked" if factory_ok else "pending"),
+        }
         factory_result["validation_required"] = not is_active
         factory_result["closure_allowed"] = bool(is_active)
         factory_result["responsibilities"] = responsibilities

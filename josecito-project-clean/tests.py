@@ -327,21 +327,56 @@ class TestSystemEngineer(unittest.TestCase):
         self.assertEqual(ticket["status"], "open")
         self.assertFalse(ticket["closure_allowed"])
         self.assertIn("conectar Telegram voice", ticket["instruction_manifest"])
+        self.assertEqual(ticket["pipeline_stage"], "REGISTER")
+        self.assertEqual(ticket["capability_pipeline"]["checkpoints"]["REGISTER"], "pending")
 
         self.eng.mark_instructions_reviewed("test-agent", tid, ticket["instruction_manifest"])
+        ticket = self.eng._load_ticket("test-agent", tid)
+        self.assertEqual(ticket["pipeline_stage"], "BUILD")
+        self.assertEqual(ticket["capability_pipeline"]["checkpoints"]["REGISTER"], "done")
         self.eng.add_validation_evidence(
             "test-agent",
             tid,
             ["fake/local voice transcript reached the governed Telegram response path"],
             passed=True,
         )
+        ticket = self.eng._load_ticket("test-agent", tid)
+        self.assertEqual(ticket["pipeline_stage"], "ACTIVATE")
+        self.assertEqual(ticket["capability_pipeline"]["checkpoints"]["VALIDATE"], "done")
 
         self.assertTrue(self.eng.close_ticket("test-agent", tid, "validated"))
         ticket = self.eng._load_ticket("test-agent", tid)
         self.assertEqual(ticket["status"], "closed")
+        self.assertEqual(ticket["capability_pipeline"]["checkpoints"]["ACTIVATE"], "done")
         self.assertTrue(ticket["instructions_reviewed"])
         self.assertTrue(ticket["tool_tested"])
         self.assertTrue(ticket["validation_passed"])
+
+    def test_capability_pipeline_blocks_activation_before_validation(self):
+        result = self.eng.create_capability_request(
+            capability="telegram_web_search",
+            family="WEB",
+            sub_intent="WEB_SEARCH_CAPABILITY_REQUEST",
+            user_message="Quiero buscar en internet desde Telegram",
+            requester="test-agent",
+            instructions=["conectar CDP", "validar busqueda permitida y bloqueada"],
+        )
+        tid = result["ticket_id"]
+        self.eng.mark_instructions_reviewed("test-agent", tid, ["conectar CDP"])
+
+        advanced = self.eng.advance_capability_pipeline(
+            "test-agent",
+            tid,
+            "ACTIVATE",
+            "done",
+            note="attempted early activation",
+        )
+
+        self.assertFalse(advanced)
+        ticket = self.eng._load_ticket("test-agent", tid)
+        self.assertFalse(ticket["validation_passed"])
+        self.assertNotEqual(ticket["capability_pipeline"]["checkpoints"]["ACTIVATE"], "done")
+        self.assertIn("validation has not passed", json.dumps(ticket.get("notes", [])))
 
     def test_ticket_per_profile_isolation(self):
         """Tickets from different profiles do not mix."""
@@ -823,7 +858,8 @@ class TestFactoryStatusStore(unittest.TestCase):
         store.upsert_capability(
             "stt_audio_input",
             family="VOICE",
-            status="factory_completed_pending_activation",
+            status="pending_validation",
+            pipeline_stage="VALIDATE",
             activation_requirements=[
                 "recibir mensajes de voz desde Telegram",
                 "transcribir el audio a texto",
@@ -947,8 +983,12 @@ class TestTorreDeControl(unittest.TestCase):
         self.assertIn("builder", result.get("agent_name", ""))
         self.assertTrue(result.get("audit_ticket_id"))
         self.assertIn("user_status", result)
-        self.assertEqual(result.get("status"), "factory_completed_pending_activation")
-        self.assertEqual(result.get("audit_ticket_status"), "in_progress")
+        self.assertEqual(result.get("status"), "pending_validation")
+        self.assertEqual(result.get("audit_ticket_status"), "pending_validation")
+        self.assertEqual(result.get("pipeline_stage"), "VALIDATE")
+        self.assertEqual(result.get("pipeline_checkpoints", {}).get("BUILD"), "done")
+        self.assertEqual(result.get("pipeline_checkpoints", {}).get("VALIDATE"), "failed")
+        self.assertEqual(result.get("pipeline_checkpoints", {}).get("ACTIVATE"), "blocked")
         self.assertFalse(result.get("closure_allowed"))
         self.assertTrue(result.get("validation_required"))
         self.assertIn("activation_missing", result)
@@ -964,7 +1004,11 @@ class TestTorreDeControl(unittest.TestCase):
         self.assertNotIn("GatewayTelegram.poll_updates", result["user_status"])
         audit_ticket = self.tower._engineer._load_ticket("test-user", result["audit_ticket_id"])
         self.assertIsNotNone(audit_ticket)
-        self.assertEqual(audit_ticket["status"], "in_progress")
+        self.assertEqual(audit_ticket["status"], "pending_validation")
+        self.assertEqual(audit_ticket["pipeline_stage"], "VALIDATE")
+        self.assertEqual(audit_ticket["capability_pipeline"]["checkpoints"]["BUILD"], "done")
+        self.assertEqual(audit_ticket["capability_pipeline"]["checkpoints"]["VALIDATE"], "failed")
+        self.assertEqual(audit_ticket["capability_pipeline"]["checkpoints"]["ACTIVATE"], "blocked")
         self.assertTrue(audit_ticket["instructions_reviewed"])
         self.assertIn("actualizar GatewayTelegram.poll_updates", json.dumps(audit_ticket["instruction_manifest"]))
         self.assertTrue(audit_ticket["tool_tested"])
@@ -994,7 +1038,9 @@ class TestTorreDeControl(unittest.TestCase):
         self.assertIn("telegram_image_context", soul)
         self.assertIn("Qwen-VL", soul)
         self.assertIn("Persistent Ticket Closure Rules", soul)
-        self.assertIn("ticket stays open as `in_progress`", soul)
+        self.assertIn("ticket stays open as `pending_validation`", soul)
+        self.assertIn("REGISTER -> BUILD -> VALIDATE -> ACTIVATE", soul)
+        self.assertIn("Every capability ticket must follow this procedure in order", soul)
 
     def test_web_and_vision_capability_requests_carry_engineer_soul(self):
         self.tower.lang = "es"

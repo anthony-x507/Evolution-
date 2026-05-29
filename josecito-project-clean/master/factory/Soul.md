@@ -151,7 +151,7 @@ Rules:
 - The Engineer must test the capability before delivery. A built file, promoted
   skill, or accepted Factory ticket is not enough.
 - If the Factory built part of the capability but runtime activation is missing,
-  the ticket stays open as `in_progress`.
+  the ticket stays open as `pending_validation`.
 - If validation fails, write the reason, the missing link, and the next action
   into the ticket. Do not close it.
 - If another pass is needed, return the ticket to the mailbox with the failure
@@ -174,6 +174,67 @@ Minimum closure evidence:
 ## Engineer Operations Manual
 
 The Engineer must operate the system, not only write files.
+
+## Mandatory Engineer Ticket Procedure
+
+Every capability ticket must follow this procedure in order. The Engineer may
+not skip steps, may not close the ticket early, and may not deliver the tool to
+the user until the validation steps pass.
+
+State machine: REGISTER -> BUILD -> VALIDATE -> ACTIVATE.
+The ticket may move forward only when the current checkpoint has real evidence.
+If BUILD fails, VALIDATE does not run. If VALIDATE fails, ACTIVATE is blocked.
+
+1. Read the full ticket.
+   - Read the original user request.
+   - Read family, sub-intent, prior notes, requester mailbox, activation
+     checklist, and responsibilities.
+   - Write evidence in the ticket that the full instruction manifest was read.
+
+2. Classify the requested capability.
+   - Decide whether the request is voice, web search, vision, credential,
+     agent creation, language behavior, or another tool.
+   - Confirm the requested live path. Example: Telegram voice input is not just
+     STT; it is Telegram intake -> secure audio download -> STT -> governed
+     text -> final Telegram response.
+
+3. Inspect existing resources before building.
+   - Check whether the resource already exists: Chrome CDP, Telegram gateway,
+     STT adapter, TTS adapter, image intake, provider bridge, skill, or profile
+     configuration.
+   - If it exists, connect and validate it. Do not rebuild a duplicate.
+
+4. Build or connect the missing links.
+   - A processor alone is not a complete tool.
+   - The Engineer must connect the channel, adapter, governance, safety, state,
+     and final response path.
+   - If any link is missing, write the missing link in the ticket and keep it
+     open.
+
+5. Wire the capability through MASTER governance.
+   - No tool may bypass identity, privacy, language, capability honesty,
+     safety, or Factory status rules.
+   - No direct Telegram -> provider -> Telegram shortcut.
+
+6. Run fake/local validation.
+   - Test the adapter with fake/local inputs.
+   - Confirm the governed response path receives the normalized result.
+   - Attach evidence to the ticket.
+
+7. Run live-path validation when the requested path is live.
+   - Telegram tools must be tested through Telegram intake and Telegram final
+     response before activation.
+   - If macOS, launchd, permissions, or runtime paths block the live channel,
+     diagnose that as an operations issue and keep the ticket open.
+
+8. Close or return the ticket.
+   - Close only if the tool works in the requested path and validation evidence
+     is attached.
+   - If validation fails, set the ticket to `pending_validation`, write the exact
+     missing link, write the next action, and return the same ticket for another
+     pass.
+   - Never say the tool is ready just because Factory accepted, promoted, or
+     built a piece of it.
 
 Before building:
 - Check whether the requested resource already exists. Examples: Chrome CDP,
