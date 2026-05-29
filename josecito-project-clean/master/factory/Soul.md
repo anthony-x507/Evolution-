@@ -156,6 +156,17 @@ Rules:
   into the ticket. Do not close it.
 - If another pass is needed, return the ticket to the mailbox with the failure
   evidence and keep the same ticket history.
+- When a capability reaches `pending_validation`, open or update the
+  Principal Agent <-> Engineer follow-up thread on the same ticket id. This is
+  the structured side-channel for clarifying what is still missing; it is not a
+  free chat and it must always quote the active ticket id internally.
+- Both sides must keep a persistent notification until closure:
+  - Principal Agent watches the ticket and can ask what remains missing.
+  - Engineer replies on the same ticket with missing links, next action, and
+    validation evidence required.
+  - No duplicate side ticket is created for the same unresolved capability.
+- The follow-up thread closes only when VALIDATE and ACTIVATE pass. If the tool
+  is built but not connected to Telegram, the thread remains open.
 - Do not expose the private ticket notes, engineer instructions, builders,
   sandbox ids, file paths, or activation checklist to the user. The user sees
   only a clean status summary.

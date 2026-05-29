@@ -379,6 +379,51 @@ class TestSystemEngineer(unittest.TestCase):
         self.assertNotEqual(ticket["capability_pipeline"]["checkpoints"]["ACTIVATE"], "done")
         self.assertIn("validation has not passed", json.dumps(ticket.get("notes", [])))
 
+    def test_capability_followup_thread_is_persistent_and_ticket_bound(self):
+        instructions = [
+            "conectar busqueda web al canal de Telegram",
+            "validar una busqueda permitida y una bloqueada",
+        ]
+        result = self.eng.create_capability_request(
+            capability="telegram_web_search",
+            family="WEB",
+            sub_intent="WEB_SEARCH_CAPABILITY_REQUEST",
+            user_message="Prepara una solicitud para busqueda web",
+            requester="test-agent",
+            instructions=instructions,
+        )
+        tid = result["ticket_id"]
+        self.eng.mark_instructions_reviewed("test-agent", tid, instructions)
+        followup = self.eng.coordinate_capability_followup(
+            "test-agent",
+            tid,
+            capability="telegram_web_search",
+            family="WEB",
+            user_message="Prepara una solicitud para busqueda web",
+            missing=[
+                "conectar busqueda web al canal de Telegram",
+                "validar una busqueda permitida y una bloqueada",
+            ],
+            next_action="conectar y validar antes de cerrar",
+            public_note="La solicitud sigue abierta.",
+        )
+
+        self.assertTrue(followup["ok"])
+        self.assertEqual(followup["ticket_id"], tid)
+        self.assertEqual(followup["thread_status"], "open_until_activation")
+        ticket = self.eng._load_ticket("test-agent", tid)
+        thread = ticket["agent_engineer_thread"]
+        self.assertEqual(thread["ticket_id"], tid)
+        self.assertEqual(thread["capability"], "telegram_web_search")
+        self.assertTrue(ticket["followup_required"])
+        self.assertIn("conectar busqueda web", " ".join(ticket["followup_missing"]))
+        recipients = {item["recipient"] for item in ticket["persistent_notifications"]}
+        self.assertIn("principal_agent", recipients)
+        self.assertIn("system_engineer", recipients)
+        messages = " ".join(item["message"] for item in thread["entries"])
+        self.assertIn(tid, messages)
+        self.assertIn("validar", messages.lower())
+
     def test_ticket_per_profile_isolation(self):
         """Tickets from different profiles do not mix."""
         (TEST_DIR / ".digos" / "profiles" / "profile-a").mkdir(exist_ok=True)
@@ -1024,6 +1069,37 @@ class TestFactoryStatusStore(unittest.TestCase):
         self.assertNotIn("recibir mensajes de voz desde Telegram", summary)
         self.assertNotIn("Siguiente paso", summary)
 
+    def test_pending_activation_summary_uses_engineer_followup_note(self):
+        from digos_lib.factory_status import FactoryStatusStore
+
+        path = TEST_DIR / ".digos" / "factory_status_followup.json"
+        store = FactoryStatusStore(path)
+        store.upsert_capability(
+            "telegram_web_search",
+            family="WEB",
+            status="pending_validation",
+            audit_ticket_id="TICKET-123",
+            activation_requirements=["connect Telegram web search"],
+            engineer_followup={
+                "ticket_id": "TICKET-123",
+                "thread_id": "agente:TICKET-123",
+                "thread_status": "open_until_activation",
+                "public_note": (
+                    "La solicitud sigue abierta. Falta conectar la búsqueda web "
+                    "al canal de Telegram y validar una búsqueda permitida y una bloqueada."
+                ),
+                "missing": ["connect Telegram web search"],
+                "next_action": "connect and validate",
+            },
+        )
+
+        summary = store.public_summary("telegram_web_search", language="es")
+
+        self.assertIn("La solicitud sigue abierta", summary)
+        self.assertIn("búsqueda permitida", summary)
+        self.assertNotIn("TICKET-123", summary)
+        self.assertNotIn("open_until_activation", summary)
+
 
 class TestTorreDeControl(unittest.TestCase):
     """Tests for TorreDeControl (without starting daemon)."""
@@ -1159,6 +1235,17 @@ class TestTorreDeControl(unittest.TestCase):
         self.assertFalse(audit_ticket["validation_passed"])
         self.assertFalse(audit_ticket["closure_allowed"])
         self.assertIn("validation", json.dumps(audit_ticket.get("notes", [])).lower())
+        self.assertTrue(audit_ticket["followup_required"])
+        self.assertEqual(audit_ticket["agent_engineer_thread"]["ticket_id"], result["audit_ticket_id"])
+        self.assertEqual(audit_ticket["agent_engineer_thread"]["status"], "open_until_activation")
+        recipients = {item["recipient"] for item in audit_ticket["persistent_notifications"]}
+        self.assertIn("principal_agent", recipients)
+        self.assertIn("system_engineer", recipients)
+        thread_messages = " ".join(
+            item["message"] for item in audit_ticket["agent_engineer_thread"]["entries"]
+        )
+        self.assertIn(result["audit_ticket_id"], thread_messages)
+        self.assertIn("Missing", thread_messages)
         factory_ticket = self.tower._factory_manager.get_ticket(result["ticket_id"])
         self.assertIsNotNone(factory_ticket)
         soul = factory_ticket.payload.get("engineer_soul", "")
@@ -1183,6 +1270,8 @@ class TestTorreDeControl(unittest.TestCase):
         self.assertIn("Qwen-VL", soul)
         self.assertIn("Persistent Ticket Closure Rules", soul)
         self.assertIn("ticket stays open as `pending_validation`", soul)
+        self.assertIn("Principal Agent <-> Engineer follow-up thread", soul)
+        self.assertIn("persistent notification until closure", soul)
         self.assertIn("REGISTER -> BUILD -> VALIDATE -> ACTIVATE", soul)
         self.assertIn("Every capability ticket must follow this procedure in order", soul)
 

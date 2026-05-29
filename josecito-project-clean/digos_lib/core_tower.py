@@ -217,6 +217,73 @@ class TorreDeControl:
             self._log.info("clock", f"Temporal context unavailable: {e}")
             return ""
 
+    def _capability_public_followup_note(self, capability: str, family: str) -> str:
+        """Clean user-facing note when a capability needs ticket follow-up."""
+        fam = str(family or "").upper()
+        if fam == "VOICE" or capability == "stt_audio_input":
+            return (
+                "La solicitud sigue abierta. La Factoría avanzó la capacidad, pero "
+                "todavía no está activa en Telegram. Falta conectar la voz al canal "
+                "de Telegram y completar una prueba de punta a punta antes de cerrarla. "
+                "Hasta que eso quede validado, seguimos por texto."
+            )
+        if fam == "WEB" or capability in {"telegram_web_search", "web_search", "web_browsing"}:
+            return (
+                "La solicitud sigue abierta. La Factoría avanzó la capacidad, pero "
+                "todavía no está activa en Telegram. Falta conectar la búsqueda web "
+                "al canal de Telegram y validar una búsqueda permitida y una bloqueada. "
+                "Hasta que eso quede validado, seguimos por texto."
+            )
+        if fam == "VISION" or capability == "vision_image_input":
+            return (
+                "La solicitud sigue abierta. La Factoría avanzó la capacidad, pero "
+                "todavía no está activa en Telegram. Falta conectar imágenes de Telegram, "
+                "análisis visual y respuesta gobernada con una prueba de punta a punta. "
+                "Hasta que eso quede validado, seguimos por texto."
+            )
+        return (
+            "La solicitud sigue abierta. Falta completar la conexión al canal vivo "
+            "y validar la capacidad antes de cerrarla."
+        )
+
+    def _open_capability_followup(
+        self,
+        *,
+        audit_profile: str,
+        audit_ticket_id: str,
+        capability: str,
+        family: str,
+        user_message: str,
+        missing: Optional[List[str]] = None,
+        next_action: str = "",
+    ) -> dict:
+        """Open the persistent Principal Agent ↔ Engineer follow-up for a ticket."""
+        if not audit_ticket_id:
+            return {}
+        public_note = self._capability_public_followup_note(capability, family)
+        followup = self._engineer.coordinate_capability_followup(
+            audit_profile,
+            audit_ticket_id,
+            capability=capability,
+            family=family,
+            user_message=user_message,
+            missing=missing or [],
+            next_action=next_action,
+            public_note=public_note,
+        )
+        if followup.get("ok"):
+            self._record_timeline_event(
+                role="factory",
+                summary=f"seguimiento persistente abierto: {capability}",
+                bullet_points=[
+                    f"ticket: {audit_ticket_id}",
+                    followup.get("thread_status", ""),
+                ],
+                event_type="factory.ticket.followup",
+                metadata={"capability": capability, "audit_ticket_id": audit_ticket_id},
+            )
+        return followup
+
     def run(self):
         if self._daemon_mode:
             self._run_daemon()
@@ -1016,18 +1083,32 @@ class TorreDeControl:
                 ],
             )
             audit_profile = result.get("profile", requester or "agente")
+            audit_ticket_id = result.get("ticket_id", "")
+            engineer_followup = self._open_capability_followup(
+                audit_profile=audit_profile,
+                audit_ticket_id=audit_ticket_id,
+                capability=capability,
+                family=family,
+                user_message=user_message,
+                missing=[
+                    "No automatic Factory definition exists for this request.",
+                    "A reviewer must define the missing capability and validation path.",
+                ],
+                next_action="definir la capacidad y validarla antes de cerrarla.",
+            )
             self._factory_status.upsert_capability(
                 capability,
                 family=family,
                 user_message=user_message,
                 status="registered",
-                audit_ticket_id=result.get("ticket_id", ""),
+                audit_ticket_id=audit_ticket_id,
                 audit_profile=audit_profile,
                 requester=requester,
                 responsibilities=responsibilities,
                 activation_requirements=[],
                 activation_missing=[],
                 pipeline_stage="REGISTER",
+                engineer_followup=engineer_followup or None,
                 note="Capability identified without an automatic Factory definition.",
             )
             self._record_timeline_event(
@@ -1035,7 +1116,7 @@ class TorreDeControl:
                 summary=f"solicitud identificada sin definicion automatica: {capability}",
                 bullet_points=[family, "requiere revision manual"],
                 event_type="factory.ticket.registered",
-                metadata={"capability": capability, "audit_ticket_id": result.get("ticket_id", "")},
+                metadata={"capability": capability, "audit_ticket_id": audit_ticket_id},
             )
             result["user_status"] = self._factory_status.public_summary(capability, language=self._active_language())
             return result
@@ -1100,12 +1181,22 @@ class TorreDeControl:
 
         if self._factory_manager is None:
             ticket_id = audit_result.get("ticket_id", "")
+            engineer_followup = {}
             if ticket_id:
                 self._engineer.add_note(audit_profile, ticket_id,
                     "Factory not available — request logged for awareness")
                 self._engineer.update_status(audit_profile, ticket_id, "open")
                 self._engineer.add_note(audit_profile, ticket_id,
                     "Ticket remains open until Factory processing becomes available.")
+                engineer_followup = self._open_capability_followup(
+                    audit_profile=audit_profile,
+                    audit_ticket_id=ticket_id,
+                    capability=capability,
+                    family=family,
+                    user_message=user_message,
+                    missing=["Factory is not available in this runtime."],
+                    next_action="inicializar la Factoría y continuar este mismo ticket.",
+                )
             self._factory_status.upsert_capability(
                 capability,
                 family=family,
@@ -1119,6 +1210,7 @@ class TorreDeControl:
                 activation_missing=activation_requirements,
                 pipeline_stage="REGISTER",
                 next_step=activation_next_step,
+                engineer_followup=engineer_followup or None,
                 note="Factory unavailable.",
             )
             return {
@@ -1167,6 +1259,7 @@ class TorreDeControl:
             )
         except Exception as e:
             ticket_id = audit_result.get("ticket_id", "")
+            engineer_followup = {}
             if ticket_id:
                 self._engineer.add_note(audit_profile, ticket_id,
                     f"Factory error: {e}")
@@ -1182,6 +1275,15 @@ class TorreDeControl:
                 )
                 self._engineer.add_note(audit_profile, ticket_id,
                     "Ticket remains open with failure evidence for another pass.")
+                engineer_followup = self._open_capability_followup(
+                    audit_profile=audit_profile,
+                    audit_ticket_id=ticket_id,
+                    capability=capability,
+                    family=family,
+                    user_message=user_message,
+                    missing=[str(e)],
+                    next_action="corregir el fallo de Factoría y reintentar este mismo ticket.",
+                )
             self._factory_status.upsert_capability(
                 capability,
                 family=family,
@@ -1195,6 +1297,7 @@ class TorreDeControl:
                 activation_missing=activation_requirements,
                 pipeline_stage="BUILD",
                 next_step=activation_next_step,
+                engineer_followup=engineer_followup or None,
                 note=f"Factory error: {e}",
             )
             return {
@@ -1206,6 +1309,7 @@ class TorreDeControl:
 
         if factory_result is None:
             ticket_id = audit_result.get("ticket_id", "")
+            engineer_followup = {}
             if ticket_id:
                 self._engineer.add_note(audit_profile, ticket_id,
                     "Factory returned None — no handler for this request")
@@ -1221,6 +1325,15 @@ class TorreDeControl:
                 )
                 self._engineer.add_note(audit_profile, ticket_id,
                     "Ticket remains open because no Factory handler completed it.")
+                engineer_followup = self._open_capability_followup(
+                    audit_profile=audit_profile,
+                    audit_ticket_id=ticket_id,
+                    capability=capability,
+                    family=family,
+                    user_message=user_message,
+                    missing=["Factory returned no result for this capability."],
+                    next_action="definir un handler de Factoría y reintentar este mismo ticket.",
+                )
             self._factory_status.upsert_capability(
                 capability,
                 family=family,
@@ -1234,6 +1347,7 @@ class TorreDeControl:
                 activation_missing=activation_requirements,
                 pipeline_stage="BUILD",
                 next_step=activation_next_step,
+                engineer_followup=engineer_followup or None,
                 note="Factory returned no result.",
             )
             return {
@@ -1256,6 +1370,7 @@ class TorreDeControl:
         responsibilities = dict(responsibilities)
         if factory_result.get("agent_name"):
             responsibilities["builder"] = factory_result["agent_name"]
+        engineer_followup = {}
 
         if ticket_id:
             if factory_ok and is_active:
@@ -1311,6 +1426,15 @@ class TorreDeControl:
                     "Factory processed the request, but VALIDATE did not pass. "
                     "Runtime activation and end-to-end validation are still pending. "
                     "Ticket remains open at pending_validation.")
+                engineer_followup = self._open_capability_followup(
+                    audit_profile=audit_profile,
+                    audit_ticket_id=ticket_id,
+                    capability=capability,
+                    family=family,
+                    user_message=user_message,
+                    missing=activation_requirements,
+                    next_action=activation_next_step,
+                )
                 self._log.info("torre",
                     f"Ticket #{ticket_id} remains open: {capability} pending validation")
             else:
@@ -1329,6 +1453,15 @@ class TorreDeControl:
                 self._engineer.add_note(audit_profile, ticket_id,
                     "Returned to the mailbox with failure details. Validation did not run "
                     "because BUILD failed; the ticket stays open.")
+                engineer_followup = self._open_capability_followup(
+                    audit_profile=audit_profile,
+                    audit_ticket_id=ticket_id,
+                    capability=capability,
+                    family=family,
+                    user_message=user_message,
+                    missing=[factory_result.get("message", "unknown error")],
+                    next_action="corregir el fallo de build y reintentar este mismo ticket.",
+                )
                 self._log.warn("torre",
                     f"Ticket #{ticket_id} returned open with failure: {capability}")
 
@@ -1355,6 +1488,7 @@ class TorreDeControl:
                 "ACTIVATE": "done" if is_active else ("blocked" if factory_ok else "pending"),
             },
             next_step="" if is_active else activation_next_step,
+            engineer_followup=engineer_followup or None,
             note=(
                 "Factory completed and capability is active."
                 if is_active

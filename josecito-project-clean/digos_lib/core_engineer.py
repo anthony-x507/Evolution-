@@ -100,6 +100,46 @@ class SystemEngineer:
             "note": note,
         }
 
+    @staticmethod
+    def _thread_event(
+        sender: str,
+        recipient: str,
+        message: str,
+        *,
+        event_type: str = "message",
+        requires_response: bool = False,
+        metadata: Optional[dict] = None,
+    ) -> dict:
+        """Create a structured agent-engineer thread entry."""
+        return {
+            "at": datetime.now(timezone.utc).isoformat(),
+            "sender": sender,
+            "recipient": recipient,
+            "event_type": event_type,
+            "message": str(message or "").strip(),
+            "requires_response": bool(requires_response),
+            "metadata": dict(metadata or {}),
+        }
+
+    @staticmethod
+    def _notification_event(
+        recipient: str,
+        ticket_id: str,
+        message: str,
+        *,
+        source: str = "engineer",
+        status: str = "open",
+    ) -> dict:
+        """Create a durable notification for an agent watching a ticket."""
+        return {
+            "at": datetime.now(timezone.utc).isoformat(),
+            "recipient": recipient,
+            "ticket_id": ticket_id,
+            "source": source,
+            "status": status,
+            "message": str(message or "").strip(),
+        }
+
     def _ensure_mailbox(self, profile: str):
         self._mailbox_dir(profile).mkdir(parents=True, exist_ok=True)
 
@@ -334,6 +374,156 @@ class SystemEngineer:
         })
         self._save_ticket(profile, tid, ticket)
         return True
+
+    def coordinate_capability_followup(
+        self,
+        profile: str,
+        tid: str,
+        *,
+        capability: str,
+        family: str,
+        user_message: str,
+        missing: Optional[List[str]] = None,
+        next_action: str = "",
+        public_note: str = "",
+    ) -> dict:
+        """Open/update the persistent two-way thread for a capability ticket.
+
+        This is the structured side-channel between the Principal Agent and the
+        Engineer.  It is always anchored to the audit ticket id and stays open
+        until validation and activation complete.
+        """
+        ticket = self._load_ticket(profile, tid)
+        if not ticket:
+            return {
+                "ok": False,
+                "ticket_id": tid,
+                "thread_status": "missing_ticket",
+                "public_note": public_note,
+            }
+
+        missing_items = [str(item).strip() for item in (missing or []) if str(item).strip()]
+        requested = str(user_message or ticket.get("problem", "")).strip()
+        next_step = str(next_action or ticket.get("pipeline_next_action", "")).strip()
+
+        thread = ticket.setdefault("agent_engineer_thread", {
+            "thread_id": f"{profile}:{tid}",
+            "ticket_id": tid,
+            "profile": profile,
+            "capability": capability,
+            "family": family,
+            "status": "open",
+            "opened_at": datetime.now(timezone.utc).isoformat(),
+            "entries": [],
+        })
+        thread.update({
+            "ticket_id": tid,
+            "profile": profile,
+            "capability": capability,
+            "family": family,
+            "status": "open_until_activation",
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "requires_persistent_notification": True,
+        })
+        entries = thread.setdefault("entries", [])
+
+        main_message = (
+            f"Ticket {tid}: user request remains open for {capability}. "
+            f"Original request: {requested or 'not provided'}. "
+            "Engineer must identify the missing live-path links and keep the ticket open."
+        )
+        engineer_message = (
+            f"Ticket {tid}: keep this capability in follow-up. "
+            f"Missing: {'; '.join(missing_items) if missing_items else 'validation evidence is not complete'}. "
+            f"Next action: {next_step or 'complete validation and activation before closure'}."
+        )
+
+        # Avoid duplicating the same automatic pair on repeated status checks.
+        if not entries or entries[-1].get("metadata", {}).get("capability") != capability:
+            entries.append(self._thread_event(
+                "principal_agent",
+                "system_engineer",
+                main_message,
+                event_type="capability_followup_request",
+                requires_response=True,
+                metadata={"capability": capability, "family": family},
+            ))
+            entries.append(self._thread_event(
+                "system_engineer",
+                "principal_agent",
+                engineer_message,
+                event_type="capability_followup_response",
+                requires_response=False,
+                metadata={
+                    "capability": capability,
+                    "family": family,
+                    "missing": missing_items,
+                    "next_action": next_step,
+                },
+            ))
+        else:
+            entries.append(self._thread_event(
+                "system_engineer",
+                "principal_agent",
+                engineer_message,
+                event_type="capability_followup_refresh",
+                requires_response=False,
+                metadata={
+                    "capability": capability,
+                    "family": family,
+                    "missing": missing_items,
+                    "next_action": next_step,
+                },
+            ))
+        thread["entries"] = entries[-30:]
+
+        ticket["followup_required"] = True
+        ticket["followup_ticket_id"] = tid
+        ticket["followup_capability"] = capability
+        ticket["followup_missing"] = missing_items
+        ticket["followup_next_action"] = next_step
+        ticket["followup_public_note"] = public_note
+        ticket["status"] = ticket.get("status") or "open"
+        if ticket["status"] in ("closed", "resolved", "cancelled"):
+            ticket["status"] = "pending_validation"
+
+        notifications = ticket.setdefault("persistent_notifications", [])
+        notifications.append(self._notification_event(
+            "principal_agent",
+            tid,
+            public_note or engineer_message,
+            source="system_engineer",
+            status="open_until_activation",
+        ))
+        notifications.append(self._notification_event(
+            "system_engineer",
+            tid,
+            "Revisar hilo persistente y no cerrar sin validacion activa.",
+            source="principal_agent",
+            status="open_until_activation",
+        ))
+        ticket["persistent_notifications"] = notifications[-40:]
+
+        ticket.setdefault("notes", []).append({
+            "text": (
+                "Persistent agent-engineer follow-up opened for this capability. "
+                "Ticket must remain open until live-path validation and activation pass."
+            ),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })
+
+        self._save_ticket(profile, tid, ticket)
+        return {
+            "ok": True,
+            "ticket_id": tid,
+            "thread_id": thread["thread_id"],
+            "thread_status": thread["status"],
+            "missing": missing_items,
+            "next_action": next_step,
+            "public_note": public_note,
+            "notifications": ticket["persistent_notifications"][-2:],
+            "entries": thread["entries"][-2:],
+        }
 
     def close_ticket(self, profile: str, tid: str, resolution: str = "") -> bool:
         ticket = self._load_ticket(profile, tid)

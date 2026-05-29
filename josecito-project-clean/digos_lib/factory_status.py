@@ -62,6 +62,7 @@ class FactoryStatusStore:
         pipeline_stage: str = "",
         pipeline_checkpoints: Optional[dict[str, str]] = None,
         next_step: str = "",
+        engineer_followup: Optional[dict[str, Any]] = None,
         note: str = "",
     ) -> dict[str, Any]:
         """Create or update a capability request status."""
@@ -108,6 +109,19 @@ class FactoryStatusStore:
             record["pipeline_checkpoints"] = dict(pipeline_checkpoints)
         if next_step:
             record["next_step"] = next_step
+        if engineer_followup is not None:
+            record["engineer_followup"] = dict(engineer_followup)
+            record["ticket_thread_id"] = engineer_followup.get(
+                "thread_id",
+                record.get("ticket_thread_id", ""),
+            )
+            record["persistent_notification"] = {
+                "status": engineer_followup.get("thread_status", ""),
+                "ticket_id": engineer_followup.get("ticket_id", record.get("audit_ticket_id", "")),
+                "public_note": engineer_followup.get("public_note", ""),
+                "next_action": engineer_followup.get("next_action", ""),
+                "missing": list(engineer_followup.get("missing", []) or []),
+            }
 
         record.setdefault("timeline", []).append({
             "at": now,
@@ -182,6 +196,10 @@ class FactoryStatusStore:
             if active:
                 return "The requested capability is active."
             if status in {"factory_completed_pending_activation", "pending_validation"}:
+                followup = record.get("engineer_followup", {}) or {}
+                public_note = str(followup.get("public_note", "")).strip()
+                if public_note and not public_note.lower().startswith("la solicitud"):
+                    return public_note
                 return (
                     "The request is still open. The Factory advanced the capability, "
                     f"but it is not active in Telegram yet. {_missing_text_en()} "
@@ -192,6 +210,10 @@ class FactoryStatusStore:
         if active:
             return "La capacidad solicitada ya está activa."
         if status in {"factory_completed_pending_activation", "pending_validation"}:
+            followup = record.get("engineer_followup", {}) or {}
+            public_note = str(followup.get("public_note", "")).strip()
+            if public_note:
+                return public_note
             return (
                 "La solicitud sigue abierta. La Factoría avanzó la capacidad, pero "
                 f"todavía no está activa en Telegram. {_missing_text_es()} "
