@@ -48,6 +48,7 @@ class AIAgent:
         creation_cb: Optional[Callable] = None,
         capability_cb: Optional[Callable] = None,
         factory_status_cb: Optional[Callable] = None,
+        factory_followup_cb: Optional[Callable] = None,
         timeline_cb: Optional[Callable] = None,
         temporal_context_cb: Optional[Callable] = None,
         language: str = "es",
@@ -65,6 +66,7 @@ class AIAgent:
         self._creation_cb = creation_cb
         self._capability_cb = capability_cb
         self._factory_status_cb = factory_status_cb
+        self._factory_followup_cb = factory_followup_cb
         self._timeline_cb = timeline_cb
         self._temporal_context_cb = temporal_context_cb
         self._language = language or "es"
@@ -508,6 +510,102 @@ class AIAgent:
             "Cuando la Factoría esté conectada, podré darte seguimiento aquí."
         )
 
+    def _factory_followup_capability_hint(self, msg: str) -> str:
+        """Infer the capability that a follow-up update refers to."""
+        voice_terms = [
+            "voz", "audio", "audios", "mensaje de voz", "mensajes de voz",
+            "escuchar", "escuches", "microfono", "micrófono",
+        ]
+        web_terms = [
+            "web", "internet", "busqueda", "búsqueda", "buscar",
+            "navegar", "browser", "chrome",
+        ]
+        vision_terms = [
+            "vision", "visión", "imagen", "imagenes", "imágenes",
+            "foto", "captura", "screenshot", "ocr",
+        ]
+        if any(term in msg for term in voice_terms):
+            return "stt_audio_input"
+        if any(term in msg for term in web_terms):
+            return "telegram_web_search"
+        if any(term in msg for term in vision_terms):
+            return "vision_image_input"
+        return ""
+
+    def _factory_followup_update_response(self, msg: str, raw_message: str) -> str:
+        """Route user follow-up about an open Factory ticket back to the ticket."""
+        route_terms = [
+            "dile a la factoria", "dile a la factoría",
+            "decirle a la factoria", "decirle a la factoría",
+            "avisale a la factoria", "avísale a la factoría",
+            "reporta a la factoria", "reporta a la factoría",
+            "notifica a la factoria", "notifica a la factoría",
+            "manda mensaje a la factoria", "manda mensaje a la factoría",
+            "pidele al ingeniero", "pídele al ingeniero",
+            "dile al ingeniero", "avisale al ingeniero", "avísale al ingeniero",
+            "reporta al ingeniero", "notifica al ingeniero",
+        ]
+        issue_terms = [
+            "no esta terminada", "no está terminada",
+            "no esta terminado", "no está terminado",
+            "no funciona", "sigue incompleta", "sigue incompleto",
+            "todavia no funciona", "todavía no funciona",
+            "no esta activa", "no está activa",
+            "no quedo activa", "no quedó activa",
+            "falta conectar", "falta activar", "sigue abierta",
+        ]
+        has_route = any(term in msg for term in route_terms)
+        has_issue = any(term in msg for term in issue_terms)
+        mentions_factory = any(term in msg for term in [
+            "factoria", "factoría", "fabrica", "fábrica", "ingeniero",
+        ])
+        if not (has_route or (mentions_factory and has_issue)):
+            return ""
+
+        self._last_public_topic = "factory"
+        if not self._factory_followup_cb:
+            return (
+                "Veo que quieres actualizar una solicitud de herramienta, pero el "
+                "seguimiento interno no está activo en este momento."
+            )
+
+        capability = self._factory_followup_capability_hint(msg)
+        try:
+            result = self._factory_followup_cb(
+                user_message=raw_message,
+                capability=capability,
+                requester="agente",
+            )
+        except Exception:
+            return (
+                "No pude actualizar el seguimiento de esa solicitud ahora. "
+                "La solicitud debe seguir abierta hasta que se valide."
+            )
+
+        status = result.get("user_status", "")
+        if status:
+            return self._localize_factory_status(status)
+        if result.get("needs_clarification"):
+            return self._say(
+                "¿Te refieres a la solicitud de voz, búsqueda web o visión?",
+                "Do you mean the voice, web search, or vision request?",
+            )
+        if result.get("ok"):
+            return self._say(
+                "Sí. Dejé esa nota en el seguimiento de la solicitud. "
+                "El ticket debe seguir abierto hasta que el ingeniero complete la "
+                "conexión al canal y la prueba final.",
+                "Yes. I added that note to the request follow-up. "
+                "The ticket must stay open until the engineer completes the channel "
+                "connection and final validation.",
+            )
+        return self._say(
+            "No encontré una solicitud abierta para actualizar. Dime si es voz, "
+            "búsqueda web o visión y la preparo.",
+            "I did not find an open request to update. Tell me whether it is voice, "
+            "web search, or vision and I will prepare it.",
+        )
+
     def _check_public_product_response(self, message: str) -> str:
         """Deterministic user-facing answers before the provider."""
         msg = self._norm(message)
@@ -568,6 +666,10 @@ class AIAgent:
         if msg in {"hola", "buenas", "buenos dias", "buenas tardes", "buenas noches", "hello", "hi"}:
             self._last_public_topic = "greeting"
             return "Hola. Soy MASTER. ¿En qué puedo ayudarte hoy?"
+
+        factory_followup = self._factory_followup_update_response(msg, message)
+        if factory_followup:
+            return factory_followup
 
         factory_status = self._factory_status_response(msg)
         if factory_status:

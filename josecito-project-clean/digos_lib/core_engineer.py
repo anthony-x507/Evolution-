@@ -386,6 +386,7 @@ class SystemEngineer:
         missing: Optional[List[str]] = None,
         next_action: str = "",
         public_note: str = "",
+        force_user_update: bool = False,
     ) -> dict:
         """Open/update the persistent two-way thread for a capability ticket.
 
@@ -438,8 +439,13 @@ class SystemEngineer:
             f"Next action: {next_step or 'complete validation and activation before closure'}."
         )
 
-        # Avoid duplicating the same automatic pair on repeated status checks.
-        if not entries or entries[-1].get("metadata", {}).get("capability") != capability:
+        # Avoid duplicating the same automatic pair on repeated status checks,
+        # but always preserve explicit user follow-up updates.
+        if (
+            force_user_update
+            or not entries
+            or entries[-1].get("metadata", {}).get("capability") != capability
+        ):
             entries.append(self._thread_event(
                 "principal_agent",
                 "system_engineer",

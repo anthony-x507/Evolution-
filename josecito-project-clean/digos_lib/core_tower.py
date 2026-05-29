@@ -256,6 +256,7 @@ class TorreDeControl:
         user_message: str,
         missing: Optional[List[str]] = None,
         next_action: str = "",
+        force_user_update: bool = False,
     ) -> dict:
         """Open the persistent Principal Agent ↔ Engineer follow-up for a ticket."""
         if not audit_ticket_id:
@@ -270,6 +271,7 @@ class TorreDeControl:
             missing=missing or [],
             next_action=next_action,
             public_note=public_note,
+            force_user_update=force_user_update,
         )
         if followup.get("ok"):
             self._record_timeline_event(
@@ -283,6 +285,102 @@ class TorreDeControl:
                 metadata={"capability": capability, "audit_ticket_id": audit_ticket_id},
             )
         return followup
+
+    def report_factory_followup_issue(
+        self,
+        user_message: str,
+        capability: str = "",
+        requester: str = "agente",
+    ) -> dict:
+        """Attach a user-reported issue to the existing Factory ticket thread."""
+        record = self._factory_status.latest(capability)
+        if not record:
+            return {
+                "ok": False,
+                "needs_clarification": True,
+                "user_status": (
+                    "No encontré una solicitud abierta para actualizar. "
+                    "Dime si es voz, búsqueda web o visión."
+                ),
+            }
+
+        cap = record.get("capability", capability or "")
+        family = str(record.get("family", "") or "").upper()
+        audit_profile = record.get("audit_profile") or requester or "agente"
+        audit_ticket_id = record.get("audit_ticket_id", "")
+        if not cap or not audit_ticket_id:
+            return {
+                "ok": False,
+                "needs_clarification": False,
+                "user_status": (
+                    "Veo la solicitud, pero no encontré un ticket interno válido "
+                    "para actualizar. Debe revisarse antes de cerrarla."
+                ),
+            }
+
+        missing = (
+            record.get("activation_missing")
+            or record.get("activation_requirements")
+            or ["User reported live-channel validation is failing."]
+        )
+        next_action = (
+            record.get("next_step")
+            or "revisar el reporte del usuario, completar VALIDATE y activar antes de cerrar."
+        )
+        followup_note = (
+            f"User follow-up from Telegram: {user_message}. "
+            "Treat this as evidence that the live capability is not complete. "
+            "Do not close the ticket until the channel connection and final validation pass."
+        )
+        self._engineer.add_note(audit_profile, audit_ticket_id, followup_note)
+        self._engineer.update_status(audit_profile, audit_ticket_id, "pending_validation")
+        engineer_followup = self._open_capability_followup(
+            audit_profile=audit_profile,
+            audit_ticket_id=audit_ticket_id,
+            capability=cap,
+            family=family,
+            user_message=followup_note,
+            missing=missing,
+            next_action=next_action,
+            force_user_update=True,
+        )
+        self._factory_status.upsert_capability(
+            cap,
+            family=family,
+            user_message=user_message,
+            status="pending_validation",
+            audit_ticket_id=audit_ticket_id,
+            audit_profile=audit_profile,
+            requester=record.get("requester", requester),
+            factory_ticket_number=record.get("factory_ticket_number", ""),
+            tool_name=record.get("tool_name", ""),
+            active=False,
+            responsibilities=record.get("responsibilities", {}),
+            activation_requirements=record.get("activation_requirements", []),
+            activation_missing=missing,
+            pipeline_stage=record.get("pipeline_stage", "VALIDATE"),
+            pipeline_checkpoints=record.get("pipeline_checkpoints", {}),
+            next_step=next_action,
+            engineer_followup=engineer_followup or None,
+            note="User reported the capability is still incomplete from Telegram.",
+        )
+        self._record_timeline_event(
+            role="factory",
+            summary=f"actualizacion de seguimiento: {cap}",
+            bullet_points=[f"ticket: {audit_ticket_id}", "usuario reporto incompleto"],
+            event_type="factory.ticket.followup_update",
+            metadata={"capability": cap, "audit_ticket_id": audit_ticket_id},
+        )
+        return {
+            "ok": True,
+            "capability": cap,
+            "ticket_id": audit_ticket_id,
+            "thread_id": engineer_followup.get("thread_id", ""),
+            "user_status": self._factory_status.public_summary(
+                cap,
+                language=self._active_language(),
+            ),
+        }
 
     def run(self):
         if self._daemon_mode:
@@ -1670,6 +1768,7 @@ class TorreDeControl:
             creation_cb=self.request_internal_agent_creation,
             capability_cb=self.request_capability,
             factory_status_cb=self.get_factory_user_status,
+            factory_followup_cb=self.report_factory_followup_issue,
             timeline_cb=self._record_timeline_event,
             temporal_context_cb=self._temporal_context_for_agent,
             language=self._active_language(),

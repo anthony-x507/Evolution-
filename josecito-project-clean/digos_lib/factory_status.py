@@ -22,7 +22,7 @@ class FactoryStatusStore:
 
     @staticmethod
     def _now() -> str:
-        return datetime.now(timezone.utc).isoformat(timespec="seconds")
+        return datetime.now(timezone.utc).isoformat(timespec="microseconds")
 
     def _read(self) -> dict[str, Any]:
         if not self.path.exists():

@@ -714,6 +714,51 @@ class TestAIAgent(unittest.TestCase):
         self.assertNotIn("builder", result.lower())
         self.assertNotIn("sandbox", result.lower())
 
+    def test_factory_followup_update_goes_to_ticket_thread_not_provider(self):
+        calls = []
+
+        def followup_cb(**kwargs):
+            calls.append(kwargs)
+            return {
+                "ok": True,
+                "user_status": (
+                    "La solicitud sigue abierta. La Factoría avanzó la capacidad, "
+                    "pero todavía no está activa en Telegram. Falta conectar la voz "
+                    "al canal de Telegram y completar una prueba de punta a punta "
+                    "antes de cerrarla."
+                ),
+            }
+
+        agent = agent_mod.AIAgent(language="es", factory_followup_cb=followup_cb)
+
+        def fail_classifier(message):
+            raise AssertionError("Factory follow-up update should not reach provider classification")
+
+        agent._classify_intent = fail_classifier
+
+        result = agent.process_message("Puedes decirle a la factoría que no está terminada?")
+
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["capability"], "")
+        self.assertIn("La solicitud sigue abierta", result)
+        self.assertIn("Telegram", result)
+        self.assertNotIn("No puedo comunicarme directamente", result)
+
+    def test_factory_followup_update_passes_capability_hint(self):
+        calls = []
+        agent = agent_mod.AIAgent(
+            language="es",
+            factory_followup_cb=lambda **kwargs: calls.append(kwargs) or {
+                "ok": True,
+                "user_status": "La solicitud sigue abierta.",
+            },
+        )
+
+        result = agent.process_message("Dile al ingeniero que la herramienta de voz no funciona")
+
+        self.assertEqual(calls[0]["capability"], "stt_audio_input")
+        self.assertIn("La solicitud sigue abierta", result)
+
     def test_voice_ready_question_uses_factory_status_when_available(self):
         agent = agent_mod.AIAgent(
             language="es",
@@ -1254,6 +1299,38 @@ class TestTorreDeControl(unittest.TestCase):
         self.assertIn("getFile", soul)
         self.assertIn("telegram_voice_transcript", soul)
         self.assertIn("es-MX-JorgeNeural", soul)
+
+    def test_user_followup_update_refreshes_existing_factory_ticket(self):
+        self.tower.lang = "es"
+        self.tower.state["language"] = "es"
+        result = self.tower.request_capability(
+            capability="stt_audio_input",
+            family="VOICE",
+            sub_intent="VOICE_INPUT_CAPABILITY_REQUEST",
+            user_message="Quiero mandar audios",
+            requester="agente",
+        )
+        audit_ticket_id = result["audit_ticket_id"]
+
+        update = self.tower.report_factory_followup_issue(
+            "Puedes decirle a la factoría que no está terminada?",
+            requester="agente",
+        )
+
+        self.assertTrue(update["ok"])
+        self.assertEqual(update["ticket_id"], audit_ticket_id)
+        self.assertIn("La solicitud sigue abierta", update["user_status"])
+        ticket = self.tower._engineer._load_ticket("agente", audit_ticket_id)
+        self.assertIsNotNone(ticket)
+        self.assertEqual(ticket["status"], "pending_validation")
+        thread = ticket["agent_engineer_thread"]
+        messages = " ".join(item["message"] for item in thread["entries"])
+        self.assertIn("User follow-up from Telegram", messages)
+        self.assertIn("not complete", messages)
+        self.assertTrue(ticket["followup_required"])
+        recipients = {item["recipient"] for item in ticket["persistent_notifications"]}
+        self.assertIn("principal_agent", recipients)
+        self.assertIn("system_engineer", recipients)
 
     def test_factory_engineer_soul_documents_voice_web_and_vision_contracts(self):
         soul_path = Path(__file__).resolve().parent / "master" / "factory" / "Soul.md"
