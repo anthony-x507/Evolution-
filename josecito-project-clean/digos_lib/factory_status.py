@@ -51,6 +51,8 @@ class FactoryStatusStore:
         user_message: str = "",
         status: str = "identified",
         audit_ticket_id: str = "",
+        audit_profile: str = "",
+        requester: str = "",
         factory_ticket_number: str | int | None = None,
         tool_name: str = "",
         active: bool = False,
@@ -78,11 +80,15 @@ class FactoryStatusStore:
             "family": family or record.get("family", ""),
             "status": status,
             "audit_ticket_id": audit_ticket_id or record.get("audit_ticket_id", ""),
+            "audit_profile": audit_profile or record.get("audit_profile", ""),
+            "requester": requester or record.get("requester", ""),
             "factory_ticket_number": factory_ticket_number
                 if factory_ticket_number is not None
                 else record.get("factory_ticket_number", ""),
             "tool_name": tool_name or record.get("tool_name", ""),
             "active": bool(active),
+            "validation_required": not bool(active),
+            "closure_allowed": bool(active),
             "updated_at": now,
         })
         if user_message:
@@ -135,49 +141,57 @@ class FactoryStatusStore:
         cap = record.get("capability", "la herramienta")
         active = bool(record.get("active"))
         status = record.get("status", "")
-        missing = record.get("activation_missing") or record.get("activation_requirements") or []
-        next_step = record.get("next_step", "")
+        family = str(record.get("family", "")).upper()
 
         def _missing_text_es() -> str:
-            if not missing:
+            if family == "VOICE":
                 return (
-                    "Falta conectar esa capacidad al canal vivo y validarla antes de "
-                    "marcarla como activa."
+                    "Falta la conexión completa de voz en Telegram y una prueba de "
+                    "punta a punta antes de cerrarla."
                 )
-            visible = "; ".join(str(item) for item in missing[:4])
-            if len(missing) > 4:
-                visible += "; y completar la validacion final."
-            return f"Falta completar: {visible}."
+            if family == "WEB":
+                return (
+                    "Falta conectar la búsqueda web al canal de Telegram y validar "
+                    "una búsqueda permitida y una bloqueada."
+                )
+            if family == "VISION":
+                return (
+                    "Falta conectar imágenes de Telegram, análisis visual y respuesta "
+                    "final gobernada."
+                )
+            return (
+                "Falta conectar esa capacidad al canal vivo y validarla antes de "
+                "marcarla como activa."
+            )
 
         def _missing_text_en() -> str:
-            if not missing:
-                return "It still needs live-channel wiring and validation before activation."
-            visible = "; ".join(str(item) for item in missing[:4])
-            if len(missing) > 4:
-                visible += "; and final validation."
-            return f"Still missing: {visible}."
+            if family == "VOICE":
+                return "Voice still needs Telegram wiring and an end-to-end validation before closure."
+            if family == "WEB":
+                return "Web search still needs Telegram wiring plus allowed and blocked search validation."
+            if family == "VISION":
+                return "Vision still needs Telegram image intake, visual analysis, and governed final response."
+            return "It still needs live-channel wiring and validation before activation."
 
         if language != "es":
             if active:
                 return "The requested capability is active."
             if status == "factory_completed_pending_activation":
                 return (
-                    "The Factory prepared the capability, but it is not active in "
-                    f"Telegram yet. {_missing_text_en()} Until that is connected, "
-                    "I can only work with text here."
+                    "The request is still open. The Factory advanced the capability, "
+                    f"but it is not active in Telegram yet. {_missing_text_en()} "
+                    "Until that is connected, I can only work with text here."
                 )
             return "The request is still being reviewed."
 
         if active:
             return "La capacidad solicitada ya está activa."
         if status == "factory_completed_pending_activation":
-            summary = (
-                "La Factoría preparó la capacidad, pero todavía no está activa en "
-                f"Telegram. {_missing_text_es()} "
+            return (
+                "La solicitud sigue abierta. La Factoría avanzó la capacidad, pero "
+                f"todavía no está activa en Telegram. {_missing_text_es()} "
+                "Hasta que eso quede conectado, seguimos por texto."
             )
-            if next_step:
-                summary += f"Siguiente paso: {next_step} "
-            return summary + "Hasta que eso quede conectado, seguimos por texto."
         if status in {"factory_processing", "registered"}:
             return (
                 "La solicitud está en proceso. La Factoría y el ingeniero la tienen "

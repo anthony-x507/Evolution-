@@ -952,13 +952,20 @@ class TorreDeControl:
                 sub_intent=sub_intent,
                 user_message=user_message,
                 requester=requester,
+                instructions=[
+                    "No automatic Factory definition exists for this request.",
+                    "Do not close this ticket until a reviewer defines the missing capability and validates the live path.",
+                ],
             )
+            audit_profile = result.get("profile", requester or "agente")
             self._factory_status.upsert_capability(
                 capability,
                 family=family,
                 user_message=user_message,
                 status="registered",
                 audit_ticket_id=result.get("ticket_id", ""),
+                audit_profile=audit_profile,
+                requester=requester,
                 responsibilities=responsibilities,
                 activation_requirements=[],
                 activation_missing=[],
@@ -974,13 +981,26 @@ class TorreDeControl:
             sub_intent=sub_intent,
             user_message=user_message,
             requester=requester,
+            instructions=activation_requirements,
         )
+        audit_profile = audit_result.get("profile", requester or "agente")
+        audit_ticket_id = audit_result.get("ticket_id", "")
+        if audit_ticket_id:
+            self._engineer.mark_instructions_reviewed(
+                audit_profile,
+                audit_ticket_id,
+                activation_requirements or [
+                    "No activation checklist was provided. Keep this ticket open until manual validation passes."
+                ],
+            )
         self._factory_status.upsert_capability(
             capability,
             family=family,
             user_message=user_message,
             status="registered",
-            audit_ticket_id=audit_result.get("ticket_id", ""),
+            audit_ticket_id=audit_ticket_id,
+            audit_profile=audit_profile,
+            requester=requester,
             responsibilities=responsibilities,
             activation_requirements=activation_requirements,
             activation_missing=activation_requirements,
@@ -994,17 +1014,19 @@ class TorreDeControl:
         if self._factory_manager is None:
             ticket_id = audit_result.get("ticket_id", "")
             if ticket_id:
-                self._engineer.add_note("system", ticket_id,
+                self._engineer.add_note(audit_profile, ticket_id,
                     "Factory not available — request logged for awareness")
-                self._engineer.close_ticket("system", ticket_id,
-                    "Factory not available. Request has been logged. "
-                    "No automatic processing queued.")
+                self._engineer.update_status(audit_profile, ticket_id, "open")
+                self._engineer.add_note(audit_profile, ticket_id,
+                    "Ticket remains open until Factory processing becomes available.")
             self._factory_status.upsert_capability(
                 capability,
                 family=family,
                 user_message=user_message,
                 status="failed",
                 audit_ticket_id=ticket_id,
+                audit_profile=audit_profile,
+                requester=requester,
                 responsibilities=responsibilities,
                 activation_requirements=activation_requirements,
                 activation_missing=activation_requirements,
@@ -1029,6 +1051,8 @@ class TorreDeControl:
             user_message=user_message,
             status="factory_processing",
             audit_ticket_id=audit_result.get("ticket_id", ""),
+            audit_profile=audit_profile,
+            requester=requester,
             responsibilities=responsibilities,
             activation_requirements=activation_requirements,
             activation_missing=activation_requirements,
@@ -1049,16 +1073,19 @@ class TorreDeControl:
         except Exception as e:
             ticket_id = audit_result.get("ticket_id", "")
             if ticket_id:
-                self._engineer.add_note("system", ticket_id,
+                self._engineer.add_note(audit_profile, ticket_id,
                     f"Factory error: {e}")
-                self._engineer.close_ticket("system", ticket_id,
-                    f"Factory error processing capability '{capability}': {e}")
+                self._engineer.update_status(audit_profile, ticket_id, "open")
+                self._engineer.add_note(audit_profile, ticket_id,
+                    "Ticket remains open with failure evidence for another pass.")
             self._factory_status.upsert_capability(
                 capability,
                 family=family,
                 user_message=user_message,
                 status="failed",
                 audit_ticket_id=ticket_id,
+                audit_profile=audit_profile,
+                requester=requester,
                 responsibilities=responsibilities,
                 activation_requirements=activation_requirements,
                 activation_missing=activation_requirements,
@@ -1075,16 +1102,19 @@ class TorreDeControl:
         if factory_result is None:
             ticket_id = audit_result.get("ticket_id", "")
             if ticket_id:
-                self._engineer.add_note("system", ticket_id,
+                self._engineer.add_note(audit_profile, ticket_id,
                     "Factory returned None — no handler for this request")
-                self._engineer.close_ticket("system", ticket_id,
-                    "Factory could not process the request (no handler).")
+                self._engineer.update_status(audit_profile, ticket_id, "open")
+                self._engineer.add_note(audit_profile, ticket_id,
+                    "Ticket remains open because no Factory handler completed it.")
             self._factory_status.upsert_capability(
                 capability,
                 family=family,
                 user_message=user_message,
                 status="failed",
                 audit_ticket_id=ticket_id,
+                audit_profile=audit_profile,
+                requester=requester,
                 responsibilities=responsibilities,
                 activation_requirements=activation_requirements,
                 activation_missing=activation_requirements,
@@ -1098,40 +1128,81 @@ class TorreDeControl:
                 "message": "Factory could not process the request.",
             }
 
-        # ── 5. Update ticket with Factory result ──
-        ticket_id = audit_result.get("ticket_id", "")
-        if ticket_id:
-            ok = factory_result.get("ok", False)
-            if ok:
-                self._engineer.add_note("system", ticket_id,
-                    f"Factory processed capability: {capability}")
-                self._engineer.close_ticket("system", ticket_id,
-                    f"Capability '{capability}' sent to Factory pipeline. "
-                    f"Result: {factory_result.get('message', 'processed')}")
-                self._log.info("torre",
-                    f"Ticket #{ticket_id} closed: Factory accepted {capability}")
-            else:
-                self._engineer.add_note("system", ticket_id,
-                    f"Factory failed: {factory_result.get('message', 'unknown error')}")
-                self._engineer.close_ticket("system", ticket_id,
-                    f"Factory rejected or failed: {factory_result.get('message', '')}")
-                self._log.warn("torre",
-                    f"Ticket #{ticket_id} closed with failure: {capability}")
-
-        # ── 6. Enrich result with audit ticket info ──
+        # ── 5. Enrich result with audit ticket info ──
+        ticket_id = audit_ticket_id
         factory_result["audit_ticket_id"] = ticket_id
+        factory_result["audit_profile"] = audit_profile
         tool_name = factory_result.get("tool_name", skill_def.tool_name)
-        is_active = tool_name in AVAILABLE_CAPABILITIES or capability in AVAILABLE_CAPABILITIES
-        status = "active" if is_active else "factory_completed_pending_activation"
+        factory_ok = bool(factory_result.get("ok", False))
+        is_active = factory_ok and (tool_name in AVAILABLE_CAPABILITIES or capability in AVAILABLE_CAPABILITIES)
+        status = "active" if is_active else (
+            "factory_completed_pending_activation" if factory_ok else "failed"
+        )
         responsibilities = dict(responsibilities)
         if factory_result.get("agent_name"):
             responsibilities["builder"] = factory_result["agent_name"]
+
+        if ticket_id:
+            if factory_ok and is_active:
+                self._engineer.add_validation_evidence(
+                    audit_profile,
+                    ticket_id,
+                    [
+                        f"Capability '{capability}' exists in the active capability registry.",
+                        "Live-path validation was required before closure.",
+                    ],
+                    passed=True,
+                )
+                self._engineer.add_note(audit_profile, ticket_id,
+                    f"Factory processed and validated active capability: {capability}")
+                self._engineer.close_ticket(audit_profile, ticket_id,
+                    f"Capability '{capability}' processed, validated, and active. "
+                    f"Result: {factory_result.get('message', 'processed')}")
+                self._log.info("torre",
+                    f"Ticket #{ticket_id} closed: Factory validated {capability}")
+            elif factory_ok:
+                self._engineer.update_status(audit_profile, ticket_id, "in_progress")
+                self._engineer.add_validation_evidence(
+                    audit_profile,
+                    ticket_id,
+                    [
+                        "Factory accepted the request but the live channel is not active yet.",
+                        *activation_requirements,
+                    ],
+                    passed=False,
+                )
+                self._engineer.add_note(audit_profile, ticket_id,
+                    "Factory processed the request, but runtime activation and "
+                    "end-to-end validation are still pending. Ticket remains open.")
+                self._log.info("torre",
+                    f"Ticket #{ticket_id} remains open: {capability} pending validation")
+            else:
+                self._engineer.add_note(audit_profile, ticket_id,
+                    f"Factory failed: {factory_result.get('message', 'unknown error')}")
+                self._engineer.update_status(audit_profile, ticket_id, "open")
+                self._engineer.add_validation_evidence(
+                    audit_profile,
+                    ticket_id,
+                    [
+                        "Factory did not complete the capability request.",
+                        factory_result.get("message", "unknown error"),
+                    ],
+                    passed=False,
+                )
+                self._engineer.add_note(audit_profile, ticket_id,
+                    "Returned to the mailbox with failure details; the ticket stays open.")
+                self._log.warn("torre",
+                    f"Ticket #{ticket_id} returned open with failure: {capability}")
+
+        # ── 6. Persist live ticket status for the agent and Factory ──
         self._factory_status.upsert_capability(
             capability,
             family=family,
             user_message=user_message,
             status=status,
             audit_ticket_id=ticket_id,
+            audit_profile=audit_profile,
+            requester=requester,
             factory_ticket_number=factory_result.get("ticket_number", ""),
             tool_name=tool_name,
             active=is_active,
@@ -1147,6 +1218,9 @@ class TorreDeControl:
         )
         factory_result["active"] = is_active
         factory_result["status"] = status
+        factory_result["audit_ticket_status"] = "closed" if is_active else ("in_progress" if factory_ok else "open")
+        factory_result["validation_required"] = not is_active
+        factory_result["closure_allowed"] = bool(is_active)
         factory_result["responsibilities"] = responsibilities
         factory_result["activation_requirements"] = activation_requirements
         factory_result["activation_missing"] = [] if is_active else activation_requirements
@@ -1486,9 +1560,36 @@ class TorreDeControl:
     LAUNCHD_LABEL = "com.digos.torredecontrol"
     LAUNCHD_PATH = Path.home() / "Library" / "LaunchAgents" / f"{LAUNCHD_LABEL}.plist"
 
+    def _launchd_entrypoint(self) -> Path:
+        return Path(__file__).resolve().parent.parent / "digos.py"
+
+    def _launchd_install_block_reason(self) -> str:
+        entrypoint = self._launchd_entrypoint()
+        restricted_roots = [
+            Path.home() / "Desktop",
+            Path.home() / "Downloads",
+        ]
+        for root in restricted_roots:
+            try:
+                if entrypoint == root or root in entrypoint.parents:
+                    return (
+                        "MASTER esta corriendo desde una carpeta que macOS puede "
+                        "bloquear para servicios en segundo plano. Mueve la carpeta "
+                        "a una ruta permanente fuera de Desktop/Downloads antes de "
+                        "instalar inicio automatico."
+                    )
+            except Exception:
+                continue
+        return ""
+
     def _install_launchd(self) -> bool:
         """Installs DIGOS as a launchd service so it starts at login."""
         try:
+            block_reason = self._launchd_install_block_reason()
+            if block_reason:
+                self._log.warn("torre", f"Launchd install blocked: {block_reason}")
+                return False
+            entrypoint = self._launchd_entrypoint()
             plist_content = f'''<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -1498,7 +1599,7 @@ class TorreDeControl:
     <key>ProgramArguments</key>
     <array>
         <string>{sys.executable}</string>
-        <string>{Path(__file__).resolve().parent.parent / 'digos.py'}</string>
+        <string>{entrypoint}</string>
         <string>--daemon</string>
     </array>
     <key>RunAtLoad</key>
@@ -1592,7 +1693,14 @@ class TorreDeControl:
         print()
         question = self._ui_text("  Install auto-start?", "  ¿Instalar inicio automatico?")
         if self._confirm_yn(question):
-            if self._install_launchd():
+            block_reason = self._launchd_install_block_reason()
+            if block_reason:
+                print(f"  ⚠️ {block_reason}")
+                print(self._ui_text(
+                    "  Start MASTER manually for now, then install auto-start from the permanent folder.",
+                    "  Inicia MASTER manualmente por ahora y luego instala inicio automatico desde la carpeta permanente.",
+                ))
+            elif self._install_launchd():
                 print(self._ui_text(
                     "  ✅ Auto-start installed. MASTER will stay available.",
                     "  ✅ Inicio automatico instalado. MASTER quedara disponible.",

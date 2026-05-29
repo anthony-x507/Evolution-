@@ -1,5 +1,6 @@
 """DIGOS SystemEngineer — Ticket system with mailbox architecture."""
 import json
+import re
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -30,7 +31,13 @@ class SystemEngineer:
         self._lock = threading.Lock()  # thread-safe ticket creation
 
     def _mailbox_dir(self, profile: str) -> Path:
-        return self._profiles_dir / profile / "MAILBOX"
+        return self._profiles_dir / self._safe_profile(profile) / "MAILBOX"
+
+    @staticmethod
+    def _safe_profile(profile: str) -> str:
+        """Keep mailbox names local and predictable."""
+        cleaned = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(profile or "system")).strip("._")
+        return cleaned or "system"
 
     def _ensure_mailbox(self, profile: str):
         self._mailbox_dir(profile).mkdir(parents=True, exist_ok=True)
@@ -90,6 +97,7 @@ class SystemEngineer:
 
     def create_ticket(self, profile: str, target: str, problem: str,
                       severity: str = "medium", source: str = "manual") -> str:
+        profile = self._safe_profile(profile)
         with self._lock:
             tid = self._next_ticket_id(profile)
             ticket = Ticket(id=tid, profile=profile, source=source,
@@ -136,9 +144,75 @@ class SystemEngineer:
         self._save_ticket(profile, tid, ticket)
         return True
 
+    def mark_instructions_reviewed(self, profile: str, tid: str, instructions: List[str]) -> bool:
+        """Record that the Engineer received and reviewed the full ticket instructions."""
+        ticket = self._load_ticket(profile, tid)
+        if not ticket:
+            return False
+        manifest = [str(item) for item in instructions if str(item).strip()]
+        ticket["instructions_reviewed"] = True
+        ticket["instructions_reviewed_at"] = datetime.now(timezone.utc).isoformat()
+        ticket["instruction_manifest"] = manifest
+        ticket.setdefault("notes", []).append({
+            "text": f"Engineer reviewed full instruction manifest ({len(manifest)} item(s)).",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })
+        self._save_ticket(profile, tid, ticket)
+        return True
+
+    def add_validation_evidence(
+        self,
+        profile: str,
+        tid: str,
+        evidence: List[str],
+        *,
+        passed: bool,
+    ) -> bool:
+        """Attach validation evidence and decide whether a capability ticket may close."""
+        ticket = self._load_ticket(profile, tid)
+        if not ticket:
+            return False
+        clean_evidence = [str(item) for item in evidence if str(item).strip()]
+        ticket["tool_tested"] = True
+        ticket["validation_passed"] = bool(passed)
+        ticket["closure_allowed"] = bool(passed)
+        ticket.setdefault("validation_evidence", []).append({
+            "passed": bool(passed),
+            "items": clean_evidence,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })
+        ticket.setdefault("notes", []).append({
+            "text": (
+                "Validation passed; ticket may close."
+                if passed
+                else "Validation did not pass; ticket must remain open."
+            ),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })
+        self._save_ticket(profile, tid, ticket)
+        return True
+
     def close_ticket(self, profile: str, tid: str, resolution: str = "") -> bool:
         ticket = self._load_ticket(profile, tid)
         if not ticket: return False
+        if str(ticket.get("target", "")).startswith("capability_request:"):
+            missing = []
+            if not ticket.get("instructions_reviewed"):
+                missing.append("full instructions were not reviewed")
+            if not ticket.get("tool_tested"):
+                missing.append("tool was not tested")
+            if not ticket.get("validation_passed"):
+                missing.append("validation did not pass")
+            if not ticket.get("closure_allowed"):
+                missing.append("closure was not authorized")
+            if missing:
+                ticket.setdefault("notes", []).append({
+                    "text": "Closure blocked: " + "; ".join(missing) + ".",
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                })
+                self._save_ticket(profile, tid, ticket)
+                self.log.warn("engineer", f"Ticket #{tid} no puede cerrar: {', '.join(missing)}")
+                return False
         ticket["status"] = "closed"; ticket["resolution"] = resolution
         ticket["closed_at"] = datetime.now(timezone.utc).isoformat()
         self._save_ticket(profile, tid, ticket)
@@ -604,6 +678,7 @@ class SystemEngineer:
         sub_intent: str,
         user_message: str,
         requester: str = "agente",
+        instructions: Optional[List[str]] = None,
     ) -> dict:
         """Create a ticket for a new capability detected via intent classification.
 
@@ -618,11 +693,12 @@ class SystemEngineer:
 
         Returns: {ok, ticket_id, capability, message}
         """
+        profile = self._safe_profile(requester or "agente")
         tid = self.create_ticket(
-            profile="system",
+            profile=profile,
             target=f"capability_request:{capability}",
             problem=(
-                f"Usuario ({requester}) quiere una capacidad que no existe.\n"
+                f"Solicitante ({requester}) quiere una capacidad que no existe.\n"
                 f"Familia: {family}\n"
                 f"Sub-intención: {sub_intent}\n"
                 f"Mensaje original: {user_message[:200]}"
@@ -630,7 +706,23 @@ class SystemEngineer:
             severity="medium",
             source="intent_classifier"
         )
-        self.add_note("system", tid,
+        ticket = self._load_ticket(profile, tid)
+        if ticket:
+            ticket["closure_requirements"] = {
+                "must_read_all_instructions": True,
+                "must_test_tool_before_delivery": True,
+                "must_keep_ticket_open_until_validation_passes": True,
+            }
+            ticket["instruction_manifest"] = [
+                str(item) for item in (instructions or []) if str(item).strip()
+            ]
+            ticket["instructions_reviewed"] = False
+            ticket["tool_tested"] = False
+            ticket["validation_passed"] = False
+            ticket["closure_allowed"] = False
+            ticket["validation_evidence"] = []
+            self._save_ticket(profile, tid, ticket)
+        self.add_note(profile, tid,
             f"Capability gap detectado: {capability} ({family}/{sub_intent})")
         self.log.info("engineer",
             f"Capability request #{tid}: {capability} ({family}) — {sub_intent}")
@@ -638,6 +730,7 @@ class SystemEngineer:
         return {
             "ok": True,
             "ticket_id": tid,
+            "profile": profile,
             "capability": capability,
             "family": family,
             "sub_intent": sub_intent,

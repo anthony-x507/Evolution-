@@ -323,17 +323,25 @@ class AIAgent:
             return status
         if self._language == "es":
             lower = status.lower()
+            if "falta completar:" in lower or "gatewaytelegram" in lower:
+                return (
+                    "La solicitud sigue abierta. La Factoría avanzó la capacidad, pero "
+                    "todavía no está activa en Telegram. Falta terminar la conexión al "
+                    "canal vivo y probarla de punta a punta antes de cerrarla. "
+                    "Hasta que eso quede conectado, seguimos por texto."
+                )
             if "the factory finished" in lower or "waiting for activation" in lower:
                 return (
-                    "La Factoría preparó la capacidad, pero todavía no está activa en "
-                    "Telegram. Falta conectarla al canal vivo y validarla antes de "
-                    "marcarla como activa. Hasta que eso quede conectado, seguimos por texto."
+                    "La solicitud sigue abierta. La Factoría avanzó la capacidad, pero "
+                    "todavía no está activa en Telegram. Falta conectarla al canal vivo "
+                    "y validarla antes de cerrarla. Hasta que eso quede conectado, "
+                    "seguimos por texto."
                 )
             if "the factory prepared" in lower or "still missing" in lower:
                 return (
-                    "La Factoría preparó la capacidad, pero todavía no está activa en "
-                    "Telegram. Falta completar la conexión de audio al canal vivo, "
-                    "la transcripción y la validación final. Hasta que eso quede conectado, "
+                    "La solicitud sigue abierta. La Factoría avanzó la capacidad, pero "
+                    "todavía no está activa en Telegram. Falta completar la conexión al "
+                    "canal vivo y la validación final. Hasta que eso quede conectado, "
                     "seguimos por texto."
                 )
             if "the request is still being reviewed" in lower:

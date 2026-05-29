@@ -187,16 +187,17 @@ class ToolProgressTracker:
 
     def on_assistant_message(self, text: str) -> None:
         """Call when the model generates text between tools.
-        Muestra un mensaje separado tipo 'Déjame buscar eso primero...'"""
+        Muestra un estado genérico sin filtrar prompts ni razonamiento interno."""
         if self.mode == "off" or not text or not text.strip():
             return
 
-        clean = text.strip()[:120]
-        if len(text.strip()) > 120:
-            clean += "..."
+        msg = "💬 Preparando respuesta..."
 
         with self._lock:
-            self._progress_lines.append(f"💬 {clean}")
+            if msg == self._last_msg:
+                return
+            self._last_msg = msg
+            self._progress_lines.append(msg)
         self._flush()
 
     # ── Internals ─────────────────────────────
@@ -215,19 +216,7 @@ class ToolProgressTracker:
                 return f"{emoji} {tool_name}({list(args.keys())})\n{preview}"
             return f"{emoji} {tool_name}..."
 
-        # Modo normal: preview corto del argumento primario
-        if tool_name in PRIMARY_ARGS:
-            key = PRIMARY_ARGS[tool_name]
-            val = args.get(key)
-            if val is not None:
-                preview = str(val)[:self._preview_len]
-                if len(str(val)) > self._preview_len:
-                    preview += "..."
-                # Limpiar saltos de línea
-                preview = preview.replace("\n", " ").strip()
-                return f"{emoji} {tool_label}: \"{preview}\""
-
-        # Tool sin preview
+        # Modo normal: solo estado, sin prompts, rutas, comandos ni queries crudas.
         return f"{emoji} {tool_label}..."
 
     @staticmethod

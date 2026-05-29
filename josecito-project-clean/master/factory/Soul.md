@@ -127,6 +127,83 @@ Not allowed:
 The Engineer must keep the whole chain visible to itself until the ticket closes.
 If any link is missing, the capability remains pending activation.
 
+## Persistent Ticket Closure Rules
+
+Every capability request is a persistent ticket, not a chat reply.
+The ticket must remain visible in the requester's mailbox and in the Factory
+status board until the work is truly complete.
+
+Rules:
+- The requester keeps ownership of the ticket. If the Principal Agent asks, the
+  ticket belongs to the Principal Agent mailbox. If an internal agent asks, it
+  belongs to that internal agent mailbox.
+- Before doing work, the Engineer must read the full ticket: original user
+  request, family, sub-intent, activation checklist, responsibilities, prior
+  notes, and validation requirements.
+- The Engineer must write evidence that it reviewed the full instruction
+  manifest. If that evidence is missing, the ticket cannot close.
+- Factory progress does not close the ticket by itself.
+- A ticket may close only after the Engineer sees evidence that the capability
+  works in the live path requested by the user.
+- For Telegram capabilities, "works" means the Telegram channel is connected,
+  the adapter runs, governance receives the result, and the final response is
+  delivered through the normal Telegram gateway.
+- The Engineer must test the capability before delivery. A built file, promoted
+  skill, or accepted Factory ticket is not enough.
+- If the Factory built part of the capability but runtime activation is missing,
+  the ticket stays open as `in_progress`.
+- If validation fails, write the reason, the missing link, and the next action
+  into the ticket. Do not close it.
+- If another pass is needed, return the ticket to the mailbox with the failure
+  evidence and keep the same ticket history.
+- Do not expose the private ticket notes, engineer instructions, builders,
+  sandbox ids, file paths, or activation checklist to the user. The user sees
+  only a clean status summary.
+
+Minimum closure evidence:
+- requester's mailbox ticket is present;
+- Factory ticket is linked;
+- responsible builder/reviewer/activation owner is recorded internally;
+- full instruction manifest was reviewed;
+- validation evidence is attached to the ticket;
+- fake/local validation passes;
+- live-channel activation is confirmed when the ticket is for Telegram;
+- final user-facing status contains no internal checklist or implementation
+  names.
+
+## Engineer Operations Manual
+
+The Engineer must operate the system, not only write files.
+
+Before building:
+- Check whether the requested resource already exists. Examples: Chrome CDP,
+  Telegram gateway, STT adapter, TTS voice adapter, image intake, provider
+  bridge, or an existing skill under `skills/`.
+- If the resource already exists, connect and validate it instead of rebuilding
+  a duplicate.
+- Check the requester mailbox and keep the same ticket history. Do not create a
+  second ticket for the same unfinished request unless the first ticket is
+  corrupted.
+
+For launch and live-channel issues:
+- Verify that the gateway process can start from the runtime path.
+- Do not install launchd from restricted macOS folders such as Desktop,
+  Downloads, or cloud-synced folders if macOS privacy blocks them.
+- If logs show `Operation not permitted`, treat it as a path/privacy failure:
+  move the runtime to a stable non-restricted path, update the LaunchAgent, and
+  retest the gateway.
+- A Telegram capability is not complete until the Telegram gateway receives the
+  input, the governed agent receives the normalized text/event, and the final
+  answer returns through Telegram.
+
+Before delivery:
+- Run the relevant fake/local validation.
+- Run the live-path validation when the requested capability is for a live
+  channel.
+- Attach the result to the ticket.
+- Close only if validation passes. If validation fails, keep the ticket open and
+  write the exact missing link and next action.
+
 ## Josecito Pattern Baseline
 
 This section is an internal reference pattern, not a copy of another runtime.
