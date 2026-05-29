@@ -126,3 +126,194 @@ Not allowed:
 
 The Engineer must keep the whole chain visible to itself until the ticket closes.
 If any link is missing, the capability remains pending activation.
+
+## Josecito Pattern Baseline
+
+This section is an internal reference pattern, not a copy of another runtime.
+The Engineer may use it to understand what a complete capability looks like.
+
+Observed working shape:
+- Voice input is enabled at gateway level, not only inside the agent.
+- STT is explicit: local or local-command Whisper style adapter, with language
+  left empty when auto-detection is wanted.
+- TTS is explicit: Edge provider, voice `es-MX-JorgeNeural`, speed `1.5` for a
+  faster Spanish voice profile, and `auto_tts` disabled unless the user enables
+  voice replies.
+- Browser/CDP is explicit: Chrome runs with `--remote-debugging-port=9222`,
+  a dedicated user data directory, and `browser.cdp_url` set to
+  `ws://127.0.0.1:9222`.
+- Vision is explicit: screenshots/images go through a vision wrapper with a
+  safe prompt that separates visible facts, uncertainty, and safe next steps.
+
+The lesson:
+a capability is not complete because one processor exists. It is complete only
+when the channel, adapter, configuration, governance, evidence, and user-facing
+activation all agree.
+
+## Voice Output For Telegram
+
+Capability:
+`tts_audio_output`
+
+Goal:
+Allow MASTER to answer with voice when the user explicitly enables or requests
+voice output, without losing the normal text response path.
+
+### Required Engineer Work
+
+1. Voice profile configuration
+- Add a configurable TTS adapter with at least:
+  `provider`, `voice`, `speed`, `language`, and optional `tone`/`gender_label`.
+- Do not treat `gender_label` as a magic control. The real voice is selected by
+  provider voice id/name, for example `es-MX-JorgeNeural`.
+- Support a safe speed range. Default is `1.0`; fast mode may use `1.3`; the
+  Josecito reference uses `1.5`.
+- Store voice config in runtime config, not in prompts, tickets, chat messages,
+  or public summaries.
+
+2. TTS generation
+- Generate audio only from the final response after MASTER output safety.
+- Strip markdown/control tags before TTS.
+- Keep a text response as fallback if audio generation or delivery fails.
+- Do not synthesize secrets, tokens, private keys, or internal diagnostics.
+
+3. Telegram delivery
+- Produce a Telegram-compatible audio file.
+- Prefer OGG/Opus for Telegram voice bubbles when available; otherwise send a
+  normal audio file with a clean fallback.
+- Send voice through the existing Telegram gateway method, not through a
+  separate direct path.
+- Delete temporary audio after send unless explicit retention is approved.
+
+4. Voice reply mode
+- Support per-chat modes:
+  `off`, `voice_only`, and `all`.
+- Default must be `off` unless the user explicitly chooses voice replies.
+- If the user sends a voice message and voice replies are enabled, avoid double
+  sending the same answer as two separate voice messages.
+
+5. Activation evidence
+The Engineer may mark `tts_audio_output` active only after:
+- fake/local final text is converted to audio;
+- configured voice and speed are applied;
+- Telegram send path is called with voice/audio;
+- text fallback works when TTS fails;
+- temporary audio is cleaned up;
+- secrets and internal names are absent from generated audio text and logs.
+
+## Full Voice Conversation For Telegram
+
+Capability:
+`voice_full_duplex`
+
+Goal:
+Combine `stt_audio_input` and `tts_audio_output` into a controlled conversation
+where the user can send voice and optionally receive voice back.
+
+Activation requires both halves to pass their evidence checklists. The Engineer
+must not mark full voice conversation active if only STT or only TTS works.
+
+## Web Search And Chrome CDP For Telegram
+
+Capabilities:
+`telegram_web_search`, `web_search`, `web_browsing`, `web_fetch`
+
+Goal:
+Allow MASTER to satisfy safe web/search/navigation requests from Telegram under
+MASTER governance, using a browser/search adapter instead of pretending the
+provider has live internet.
+
+### Required Engineer Work
+
+1. CDP runtime contract
+- Provide a Chrome/CDP launch or attach path.
+- Use a dedicated browser profile directory for automation state.
+- Configure the endpoint as `browser.cdp_url`, normally
+  `ws://127.0.0.1:9222`.
+- Verify the endpoint before marking the capability active.
+- If CDP is unavailable, report the missing link; do not say web search is
+  active.
+
+2. Request routing
+- Telegram receives the user request.
+- MASTER classifies whether it is web search, web browsing, URL fetch, or unsafe
+  acquisition/search.
+- Allowed searches go to the web/CDP adapter.
+- Unsafe searches are refused or narrowed before any navigation.
+- The provider must not invent live web results when the adapter did not run.
+
+3. Browser safety
+- Navigate only to explicit user-requested or search-result URLs.
+- Do not read authenticated/private pages unless the user explicitly authorized
+  that session and the action is within scope.
+- Do not expose cookies, tokens, local storage, screenshots with secrets, or
+  browser internals to the user or provider.
+- Apply URL safety checks, redirect checks, timeouts, and result-size limits.
+
+4. Result handoff
+- Extract readable content, title, URL, timestamp/source label, and a short safe
+  summary.
+- Send only the governed summary to the language provider when drafting is
+  useful.
+- Always let MASTER produce the final Telegram response.
+
+5. Activation evidence
+The Engineer may mark web/CDP active only after:
+- fake/local CDP endpoint readiness is checked;
+- safe search request reaches the adapter;
+- unsafe search is blocked before adapter use;
+- a URL result is summarized with source label;
+- provider cannot claim web access without adapter evidence;
+- Telegram response has no CDP, cookie, cache, token, or internal browser data.
+
+## Vision Input For Telegram
+
+Capability:
+`vision_image_input`
+
+Goal:
+Allow MASTER to receive images, screenshots, and visual documents from Telegram,
+convert them into governed visual context, and answer safely.
+
+### Required Engineer Work
+
+1. Telegram intake
+- Recognize `message["photo"]`, image `message["document"]`, and supported
+  image attachments.
+- Capture only needed metadata: `chat_id`, `message_id`, `file_id`,
+  `file_unique_id`, `mime_type`, `file_size`, width/height if available.
+- Preserve the same chat boundary used for text and voice.
+
+2. Telegram file download
+- Use the same Telegram file flow as voice: `getFile`, `file_path`, secure
+  download into a private runtime temp directory outside the repo.
+- Validate MIME type and file size before analysis.
+- Delete temporary images after analysis unless explicit retention is approved.
+
+3. Vision/OCR adapter
+- Add an explicit adapter: OCR, local Qwen-VL style vision wrapper, or approved
+  vision provider.
+- The adapter must separate visible facts from guesses.
+- Use safe prompts that ask for: visible content, uncertainty, relevant text,
+  and safe next step.
+- Do not transcribe full secrets from screenshots. Redact tokens, passwords,
+  recovery codes, and private keys.
+
+4. Governed visual handoff
+- Convert the result into a governed message source such as
+  `telegram_image_context`.
+- Pass it through privacy, safety, language, identity, capability, Factory, and
+  provider gates.
+- The provider may help draft from the visual context, but it cannot receive raw
+  private images unless the selected vision adapter is explicitly approved.
+
+5. Activation evidence
+The Engineer may mark `vision_image_input` active only after:
+- fake/local Telegram image update is recognized;
+- fake/local `getFile` and download path are handled;
+- image validation rejects unsafe or excessive files;
+- OCR/vision fake returns governed context;
+- visible text containing a fake token is redacted;
+- transcript/context reaches AIAgent through normal governance;
+- final Telegram response uses the normal send path;
+- no internal names, file paths, tickets, or vision model internals are exposed.

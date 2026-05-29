@@ -898,6 +898,58 @@ class TestTorreDeControl(unittest.TestCase):
         self.assertIn("message[\"voice\"]", soul)
         self.assertIn("getFile", soul)
         self.assertIn("telegram_voice_transcript", soul)
+        self.assertIn("es-MX-JorgeNeural", soul)
+
+    def test_factory_engineer_soul_documents_voice_web_and_vision_contracts(self):
+        soul_path = Path(__file__).resolve().parent / "master" / "factory" / "Soul.md"
+        soul = soul_path.read_text(encoding="utf-8")
+
+        self.assertIn("Voice Output For Telegram", soul)
+        self.assertIn("speed `1.5`", soul)
+        self.assertIn("es-MX-JorgeNeural", soul)
+        self.assertIn("Web Search And Chrome CDP For Telegram", soul)
+        self.assertIn("ws://127.0.0.1:9222", soul)
+        self.assertIn("--remote-debugging-port=9222", soul)
+        self.assertIn("Vision Input For Telegram", soul)
+        self.assertIn("telegram_image_context", soul)
+        self.assertIn("Qwen-VL", soul)
+
+    def test_web_and_vision_capability_requests_carry_engineer_soul(self):
+        self.tower.lang = "es"
+        self.tower.state["language"] = "es"
+
+        web_result = self.tower.request_capability(
+            capability="telegram_web_search",
+            family="WEB",
+            sub_intent="WEB_SEARCH_CAPABILITY_REQUEST",
+            user_message="Quiero buscar en internet desde Telegram",
+            requester="test-user",
+        )
+        vision_result = self.tower.request_capability(
+            capability="vision_image_input",
+            family="VISION",
+            sub_intent="VISION_IMAGE_CAPABILITY_REQUEST",
+            user_message="Quiero analizar imagenes desde Telegram",
+            requester="test-user",
+        )
+
+        self.assertTrue(web_result.get("ok"), web_result.get("message"))
+        self.assertTrue(vision_result.get("ok"), vision_result.get("message"))
+
+        web_ticket = self.tower._factory_manager.get_ticket(web_result["ticket_id"])
+        vision_ticket = self.tower._factory_manager.get_ticket(vision_result["ticket_id"])
+        self.assertIsNotNone(web_ticket)
+        self.assertIsNotNone(vision_ticket)
+
+        web_soul = web_ticket.payload.get("engineer_soul", "")
+        vision_soul = vision_ticket.payload.get("engineer_soul", "")
+        self.assertIn("Web Search And Chrome CDP For Telegram", web_soul)
+        self.assertIn("browser.cdp_url", web_soul)
+        self.assertIn("Vision Input For Telegram", vision_soul)
+        self.assertIn("message[\"photo\"]", vision_soul)
+
+        self.assertIn("configurar o adjuntar Chrome CDP", "\n".join(web_result["activation_missing"]))
+        self.assertIn("usar getFile con file_id", "\n".join(vision_result["activation_missing"]))
 
     def test_factory_engineer_soul_documents_voice_telegram_contract(self):
         soul_path = Path(__file__).resolve().parent / "master" / "factory" / "Soul.md"

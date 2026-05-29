@@ -104,7 +104,17 @@ class FactoryEngineer(AgentBase):
 
     def capability_guidance(self, capability_id: str) -> str:
         """Return capability-specific guidance carried into Factory tickets."""
-        if capability_id == "stt_audio_input":
+        soul_capabilities = {
+            "stt_audio_input",
+            "tts_audio_output",
+            "voice_full_duplex",
+            "telegram_web_search",
+            "web_browsing",
+            "web_search",
+            "web_fetch",
+            "vision_image_input",
+        }
+        if capability_id in soul_capabilities:
             return self._soul_guidance
         return ""
 
