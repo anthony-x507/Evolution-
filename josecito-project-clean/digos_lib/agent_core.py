@@ -16,6 +16,7 @@ from digos_lib.agent_tools import (
 
 # Intent Classification (Camino B — natural language → capability gap)
 from digos_lib.intent_classifier import classify_intent, IntentClassification
+from digos_lib.human_intent_normalizer import normalize_human_intent
 
 
 class AIAgent:
@@ -169,6 +170,42 @@ class AIAgent:
         self._pending_intent = intent
         self._pending_intent_msg = original_message
         return intent.gap_response
+
+    def _intent_from_normalized(self, normalized) -> IntentClassification:
+        """Convert a normalized human intent into the local Factory intent shape."""
+        gap_copy = {
+            "VOICE": self._say(
+                "Puedo preparar una solicitud para agregar mensajes de voz a MASTER. "
+                "Todavía no queda activa hasta que la Factoría la revise y se conecte al canal. "
+                "¿Quieres que la mande a la Factoría?",
+                "I can prepare a request to add voice messages to MASTER. "
+                "It will not be active until the Factory reviews it and connects it to the channel. "
+                "Do you want me to send that request to the Factory?",
+            ),
+            "WEB": self._say(
+                "Puedo preparar una solicitud para agregar búsqueda web desde Telegram. "
+                "Todavía no queda activa hasta que la Factoría la revise y la conecte al canal. "
+                "¿Quieres que la mande a la Factoría?",
+                "I can prepare a request to add web search from Telegram. "
+                "It will not be active until the Factory reviews it and connects it to the channel. "
+                "Do you want me to send that request to the Factory?",
+            ),
+            "VISION": self._say(
+                "Puedo preparar una solicitud para agregar visión de imágenes a MASTER. "
+                "Todavía no queda activa hasta que la Factoría la revise y se conecte al canal. "
+                "¿Quieres que la mande a la Factoría?",
+                "I can prepare a request to add image vision to MASTER. "
+                "It will not be active until the Factory reviews it and connects it to the channel. "
+                "Do you want me to send that request to the Factory?",
+            ),
+        }
+        return self._make_capability_intent(
+            family=normalized.family,
+            sub_intent_id=normalized.sub_intent_id,
+            description=normalized.description,
+            capability=normalized.capability,
+            gap_response=gap_copy.get(normalized.family, ""),
+        )
 
     def _risk_category(self, msg: str) -> str:
         weapon_terms = [
@@ -482,6 +519,15 @@ class AIAgent:
         if any(term in msg for term in ["que edad tienes", "cuantos anos tienes", "cuantos años tienes"]):
             self._last_public_topic = "identity"
             return "No tengo una edad fija porque soy una inteligencia artificial."
+
+        normalized_intent = normalize_human_intent(message)
+        if normalized_intent.matched and normalized_intent.intent_type == "capability_request":
+            intent = self._intent_from_normalized(normalized_intent)
+            return self._queue_or_send_capability_request(
+                intent=intent,
+                original_message=message,
+                explicit=bool(normalized_intent.explicit),
+            )
 
         voice_terms = [
             "audio", "voz", "mensaje de voz", "escuchar", "escuches", "escuchame",

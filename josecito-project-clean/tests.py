@@ -683,6 +683,83 @@ class TestAIAgent(unittest.TestCase):
         self.assertIn("probarla de punta a punta", result)
         self.assertNotIn("Por ahora no puedo procesar audio", result)
 
+    def test_human_intent_normalizer_tool_request_variations(self):
+        from digos_lib.human_intent_normalizer import normalize_human_intent
+
+        voice_cases = [
+            "Quiero una herramienta de mensajería de voz",
+            "Necesito que puedas escuchar mis audios en Telegram",
+            "Quiero que me escuches cuando te mande notas de voz",
+            "Puedes activar la función de voz?",
+            "Manda a la Factoría una solicitud para procesar audio",
+            "Quiero que recibas mis mensajes de voz",
+            "Agrega soporte para audio entrante desde Telegram",
+            "Necesito una herramienta STT para transcribir voz",
+            "Crea una función para que MASTER lea mis voice notes",
+            "Quiero hablarte por micrófono y que lo conviertas a texto",
+            "Puedes pedir una herramienta para voz?",
+            "Habilita que te mande audios y los entiendas",
+            "Solicita a la fábrica una herramienta para escucharme",
+            "Necesito que puedas procesar mis mensajes de voz",
+            "Activa entrada de voz para Telegram",
+            "Pon un ticket para audio input",
+        ]
+        web_cases = [
+            "Quiero una herramienta de buscar en internet",
+            "Manda solicitud a la fábrica para búsqueda web",
+            "Necesito web search desde Telegram",
+            "Agrega soporte para buscar páginas web",
+            "Crea una herramienta para consultar Google",
+            "Quiero que puedas abrir Panamá.com y resumirlo",
+            "Deja identificada una solicitud para búsqueda web",
+            "Necesito navegar internet desde el bot",
+            "Activa una herramienta de web browsing",
+            "Quiero pedir a la Factoría internet en Telegram",
+            "Haz una solicitud para consultar sitios web",
+            "Necesito un buscador web conectado al agente",
+            "Agrega web fetch para revisar URLs",
+            "Pide una herramienta para investigar noticias actuales",
+            "Create a tool for web search in Telegram",
+            "Agrega browsing a MASTER",
+            "Necesito que puedas ir a github.com",
+            "Pon un ticket para navegador web",
+            "Quiero que investigues online con una herramienta",
+            "Solicita Chrome CDP para navegación",
+        ]
+        vision_cases = [
+            "Quiero una herramienta de visión",
+            "Manda solicitud a la fábrica para analizar imágenes",
+            "Necesito que puedas leer capturas de pantalla",
+            "Agrega soporte para OCR en fotos",
+            "Create a tool to analyze screenshots from Telegram",
+        ]
+
+        for message in voice_cases:
+            with self.subTest(message=message):
+                intent = normalize_human_intent(message)
+                self.assertTrue(intent.matched)
+                self.assertEqual(intent.capability, "stt_audio_input")
+
+        for message in web_cases:
+            with self.subTest(message=message):
+                intent = normalize_human_intent(message)
+                self.assertTrue(intent.matched)
+                self.assertEqual(intent.capability, "telegram_web_search")
+
+        for message in vision_cases:
+            with self.subTest(message=message):
+                intent = normalize_human_intent(message)
+                self.assertTrue(intent.matched)
+                self.assertEqual(intent.capability, "vision_image_input")
+
+        for message in [
+            "Puedo mandarte un mensaje de voz?",
+            "Puedo enviarte una captura?",
+            "Puedes buscar en internet?",
+        ]:
+            with self.subTest(message=message):
+                self.assertFalse(normalize_human_intent(message).matched)
+
     def test_orchestra_intent_router_40_variations(self):
         """Forty human-language variations for tool, language, credential, and risk flow."""
 
@@ -742,8 +819,8 @@ class TestAIAgent(unittest.TestCase):
             ("Quiero una función de OCR para imágenes", "vision_image_input", "en proceso"),
             ("Deja solicitud para vision en Telegram", "vision_image_input", "en proceso"),
             ("Manda a la Factoría una herramienta para reconocer imagenes", "vision_image_input", "en proceso"),
-            ("Quiero una herramienta de mensajes de voz", "stt_audio_input", "¿Quieres que la mande"),
-            ("Necesito que puedas escucharme", "stt_audio_input", "¿Quieres que la mande"),
+            ("Quiero una herramienta de mensajes de voz", "stt_audio_input", "en proceso"),
+            ("Necesito que puedas escucharme", "stt_audio_input", "en proceso"),
             ("Puedo activar la función de voz?", "stt_audio_input", "¿Quieres que la mande"),
             ("Quiero que recibas mis mensajes de voz", "stt_audio_input", "¿Quieres que la mande"),
         ]
@@ -1218,16 +1295,14 @@ class TestTorreDeControl(unittest.TestCase):
         )
         agent._classify_intent = lambda message: intent
 
-        first = agent.process_message("Quiero que puedas recibir mis mensajes de voz")
-        second = agent.process_message("sí")
+        result = agent.process_message("Quiero que puedas recibir mis mensajes de voz")
 
-        self.assertIn("¿Quieres que la mande a la Factoría?", first)
-        self.assertIn("La solicitud sigue abierta", second)
-        self.assertIn("punta a punta", second)
-        self.assertNotIn("SOLICITUD ENVIADA A LA FACTORÍA", second)
-        self.assertNotIn("stt_processor", second)
-        self.assertNotIn("stt_audio_input_builder", second)
-        self.assertNotIn("Sandbox", second)
+        self.assertIn("La solicitud sigue abierta", result)
+        self.assertIn("punta a punta", result)
+        self.assertNotIn("SOLICITUD ENVIADA A LA FACTORÍA", result)
+        self.assertNotIn("stt_processor", result)
+        self.assertNotIn("stt_audio_input_builder", result)
+        self.assertNotIn("Sandbox", result)
         self.assertIsNotNone(self.tower._factory_manager)
 
 
