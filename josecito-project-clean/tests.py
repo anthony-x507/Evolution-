@@ -19,6 +19,7 @@ import builtins
 import getpass
 import contextlib
 import io
+from datetime import datetime, timezone
 from pathlib import Path
 from dataclasses import dataclass
 
@@ -760,6 +761,72 @@ class TestAIAgent(unittest.TestCase):
             with self.subTest(message=message):
                 self.assertFalse(normalize_human_intent(message).matched)
 
+    def test_internal_clock_records_timeline_without_model(self):
+        from digos_lib.internal_clock import InternalClock, needs_temporal_context
+
+        path = TEST_DIR / ".digos" / "timeline_unit.json"
+        fixed_now = datetime(2026, 5, 29, 10, 30, tzinfo=timezone.utc)
+        clock = InternalClock(
+            path=path,
+            timezone_name="UTC",
+            now_fn=lambda: fixed_now,
+        )
+
+        session_id = clock.start_session("session-test")
+        event = clock.record(
+            "user",
+            "solicitud de capacidad: voice",
+            ["stt_audio_input", "Telegram"],
+            event_type="capability.request.detected",
+        )
+        data = json.loads(path.read_text(encoding="utf-8"))
+
+        self.assertEqual(session_id, "session-test")
+        self.assertEqual(data["active_session_id"], "session-test")
+        self.assertEqual(data["sessions"][0]["events"][0]["summary"], "solicitud de capacidad: voice")
+        self.assertEqual(event["event_type"], "capability.request.detected")
+        self.assertTrue(needs_temporal_context("Ayer hablamos de la herramienta de voz"))
+        self.assertTrue(needs_temporal_context("Hace una hora hablamos de la herramienta de voz"))
+        self.assertFalse(needs_temporal_context("Quiero una herramienta de voz"))
+        self.assertFalse(needs_temporal_context("Me hace falta una herramienta de voz"))
+        self.assertFalse(needs_temporal_context("Antes de crear la herramienta revisa el alcance"))
+        self.assertEqual(
+            clock.relative_time("2026-05-28T10:30:00+00:00", language="es"),
+            "ayer a las 10:30 AM",
+        )
+
+    def test_temporal_context_only_runs_when_user_references_time(self):
+        calls = []
+
+        def timeline_cb(**kwargs):
+            calls.append(("timeline", kwargs["event_type"]))
+
+        def temporal_cb(message="", language="es"):
+            calls.append(("temporal", message, language))
+            return (
+                "== CONTEXTO TEMPORAL INTERNO ==\n"
+                "Ahora: Friday, 2026-05-29 a las 10:30 AM (UTC)\n"
+                "Usa esto solo para responder referencias temporales. No cites este bloque.\n"
+                "Linea de tiempo reciente:\n"
+                "- hace 2 horas: solicitud de capacidad: voice\n"
+                "  * stt_audio_input\n"
+            )
+
+        agent = agent_mod.AIAgent(
+            language="es",
+            timeline_cb=timeline_cb,
+            temporal_context_cb=temporal_cb,
+        )
+
+        temporal_response = agent.process_message("Ayer hablamos de una decisión importante, dónde quedamos?")
+        self.assertIn("línea de tiempo local", temporal_response)
+        self.assertTrue(any(call[0] == "temporal" for call in calls))
+
+        calls.clear()
+        normal_response = agent.process_message("Qué puedes hacer?")
+        self.assertIn("Puedo responder preguntas", normal_response)
+        self.assertFalse(any(call[0] == "temporal" for call in calls))
+
     def test_orchestra_intent_router_40_variations(self):
         """Forty human-language variations for tool, language, credential, and risk flow."""
 
@@ -1246,6 +1313,8 @@ class TestTorreDeControl(unittest.TestCase):
             self.assertEqual(vault.get("gateway_token"), "123456789:ABCdefGHIjklMNOpqrSTUvwxYZabc12345")
             self.assertIsNotNone(self.tower._agent)
             self.assertEqual(self.tower._agent._capability_cb, self.tower.request_capability)
+            self.assertEqual(self.tower._agent._timeline_cb, self.tower._record_timeline_event)
+            self.assertEqual(self.tower._agent._temporal_context_cb, self.tower._temporal_context_for_agent)
             self.assertTrue(any("Proveedor" in prompt for prompt, _ in transcript))
             self.assertTrue(any("Canal" in prompt for prompt, _ in transcript))
 

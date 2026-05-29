@@ -17,6 +17,7 @@ from digos_lib.agent_tools import (
 # Intent Classification (Camino B — natural language → capability gap)
 from digos_lib.intent_classifier import classify_intent, IntentClassification
 from digos_lib.human_intent_normalizer import normalize_human_intent
+from digos_lib.internal_clock import needs_temporal_context
 
 
 class AIAgent:
@@ -47,6 +48,8 @@ class AIAgent:
         creation_cb: Optional[Callable] = None,
         capability_cb: Optional[Callable] = None,
         factory_status_cb: Optional[Callable] = None,
+        timeline_cb: Optional[Callable] = None,
+        temporal_context_cb: Optional[Callable] = None,
         language: str = "es",
         max_iterations: int = 15,
     ):
@@ -62,6 +65,8 @@ class AIAgent:
         self._creation_cb = creation_cb
         self._capability_cb = capability_cb
         self._factory_status_cb = factory_status_cb
+        self._timeline_cb = timeline_cb
+        self._temporal_context_cb = temporal_context_cb
         self._language = language or "es"
         self._max_iterations = max_iterations
 
@@ -72,6 +77,7 @@ class AIAgent:
         self._pending_intent: Optional[IntentClassification] = None  # intent waiting for user confirmation
         self._pending_intent_msg: str = ""  # original message that triggered the intent
         self._pending_language: Optional[str] = None  # language change waiting for user confirmation
+        self._pending_temporal_context: str = ""
         self._last_public_topic: str = ""
         self._risk_history: List[dict] = []
 
@@ -108,7 +114,93 @@ class AIAgent:
         self._messages.append({"role": "user", "content": clean_msg})
         self._messages.append({"role": "assistant", "content": response})
         self._last_public_topic = topic or self._last_public_topic
+        self._record_timeline(
+            "assistant",
+            self._timeline_response_summary(topic or self._last_public_topic),
+            event_type="assistant.response",
+        )
         return response
+
+    def _record_timeline(
+        self,
+        role: str,
+        summary: str,
+        bullet_points: Optional[List[str]] = None,
+        event_type: str = "conversation",
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Record compact timeline events without exposing raw chat to the LLM."""
+        if not self._timeline_cb:
+            return
+        try:
+            self._timeline_cb(
+                role=role,
+                summary=summary,
+                bullet_points=bullet_points or [],
+                event_type=event_type,
+                metadata=metadata or {},
+            )
+        except Exception:
+            pass
+
+    def _timeline_message_summary(self, message: str) -> tuple[str, List[str], str]:
+        msg = self._norm(message)
+        normalized = normalize_human_intent(message)
+        if normalized.matched:
+            return (
+                f"solicitud de capacidad: {normalized.topic}",
+                [normalized.capability, normalized.sub_intent_id],
+                "capability.request.detected",
+            )
+        factory_status_terms = [
+            "mi herramienta esta lista", "estado del ticket", "como va el ticket",
+            "mi ticket", "ya termino", "esta terminado", "que falta para la herramienta",
+            "por que la factoria no termina", "por qué la factoría no termina",
+            "ya puedo mandar mensajes de voz", "ya puedo usar voz",
+        ]
+        if any(term in msg for term in factory_status_terms):
+            return (
+                "consulta de estado de una herramienta",
+                ["el usuario pidio seguimiento de una solicitud"],
+                "factory.status.requested",
+            )
+        if needs_temporal_context(message):
+            return (
+                "referencia temporal en la conversacion",
+                ["el usuario pregunto por algo dicho antes"],
+                "temporal.reference",
+            )
+        if self._check_identity_question(message):
+            return ("pregunta sobre identidad publica", [], "identity.question")
+        if "?" in message:
+            return ("pregunta del usuario", [], "conversation.question")
+        return ("mensaje del usuario", [], "conversation.message")
+
+    def _timeline_response_summary(self, topic: str = "") -> str:
+        topics = {
+            "factory": "respuesta sobre seguimiento de Factoría",
+            "language": "respuesta sobre preferencia de idioma",
+            "identity": "respuesta de identidad publica",
+            "safety": "respuesta de seguridad",
+            "voice": "respuesta sobre capacidad de voz",
+            "web": "respuesta sobre busqueda web",
+            "vision": "respuesta sobre vision de imagenes",
+            "system": "respuesta sobre funcionamiento del producto",
+            "capability": "respuesta sobre capacidades actuales",
+        }
+        return topics.get(topic or "", "respuesta del agente")
+
+    def _maybe_prepare_temporal_context(self, message: str) -> None:
+        self._pending_temporal_context = ""
+        if not self._temporal_context_cb or not needs_temporal_context(message):
+            return
+        try:
+            self._pending_temporal_context = self._temporal_context_cb(
+                message=message,
+                language=self._language,
+            ) or ""
+        except Exception:
+            self._pending_temporal_context = ""
 
     @staticmethod
     def _semantic_message(message: str) -> str:
@@ -1141,6 +1233,14 @@ class AIAgent:
 
         clean_msg = gate_result["clean_message"]
         semantic_msg = self._semantic_message(clean_msg)
+        summary, bullets, event_type = self._timeline_message_summary(semantic_msg)
+        self._record_timeline(
+            "user",
+            summary,
+            bullet_points=bullets,
+            event_type=event_type,
+        )
+        self._maybe_prepare_temporal_context(semantic_msg)
 
         risk_response = self._self_aware_risk_response(user_message, gate_result)
         if risk_response:
@@ -1263,6 +1363,11 @@ class AIAgent:
                         self._assistant_cb(f"⚠️ Credenciales redactadas de la respuesta")
                     safe_response = self._sanitize_visible_response(safe_response)
                     self._messages[-1]["content"] = safe_response
+                    self._record_timeline(
+                        "assistant",
+                        "respuesta conversacional del agente",
+                        event_type="assistant.response",
+                    )
                     return safe_response
                 else:
                     return "No pude procesar tu mensaje."
@@ -1330,13 +1435,18 @@ class AIAgent:
     def _call_llm(self) -> tuple:
         """Llama al LLM. Retorna (assistant_text, list_of_tool_calls)."""
         if not self._base_url or not self._api_key:
+            if self._pending_temporal_context:
+                return self._temporal_context_fallback(), []
             return "LLM no configurado. Usa --setup para configurar API key.", []
 
         endpoint = self._base_url + "/chat/completions"
+        messages = self._messages[-20:]
+        if self._pending_temporal_context:
+            messages = self._messages_with_temporal_context(messages)
 
         body = {
             "model": self._model,
-            "messages": self._messages[-20:],  # últimos 20 mensajes
+            "messages": messages,
             "max_tokens": 2048,
             "temperature": 0.7,
         }
@@ -1389,6 +1499,28 @@ class AIAgent:
 
         return content, tool_calls
 
+    def _messages_with_temporal_context(self, messages: List[dict]) -> List[dict]:
+        if not self._pending_temporal_context:
+            return messages
+        context_msg = {
+            "role": "system",
+            "content": self._pending_temporal_context,
+        }
+        if messages and messages[0].get("role") == "system":
+            return [messages[0], context_msg, *messages[1:]]
+        return [context_msg, *messages]
+
+    def _temporal_context_fallback(self) -> str:
+        lines = [
+            line
+            for line in self._pending_temporal_context.splitlines()
+            if line and not line.startswith("==") and "No cites este bloque" not in line
+            and "Do not quote this block" not in line
+        ]
+        if self._language == "en":
+            return "I can use my local timeline for that. " + " ".join(lines[:6])
+        return "Puedo usar mi línea de tiempo local para eso. " + " ".join(lines[:6])
+
     # ── Intent Confirmation (two-step) ────────────────────────
 
     CONFIRMATION_YES = [
@@ -1439,6 +1571,12 @@ class AIAgent:
           5. Promotes skill to superior
         """
         if not self._capability_cb:
+            self._record_timeline(
+                "factory",
+                "Factoría no disponible para la solicitud",
+                [intent.capability],
+                event_type="factory.unavailable",
+            )
             return intent.gap_response + "\n\n(La Factoría no está disponible en este momento.)"
 
         try:
@@ -1453,6 +1591,13 @@ class AIAgent:
             return intent.gap_response + f"\n\n❌ Error al preparar la solicitud: {e}"
 
         if result.get("ok"):
+            self._record_timeline(
+                "factory",
+                "solicitud enviada a Factoría",
+                [intent.capability, result.get("status", "")],
+                event_type="factory.request.sent",
+                metadata={"capability": intent.capability},
+            )
             status = result.get("user_status", "")
             if status:
                 self._last_public_topic = "factory"
@@ -1462,6 +1607,13 @@ class AIAgent:
                 "Todavía no queda activa en Telegram."
             )
         else:
+            self._record_timeline(
+                "factory",
+                "solicitud de Factoría no completada",
+                [intent.capability],
+                event_type="factory.request.failed",
+                metadata={"capability": intent.capability},
+            )
             return result.get("user_status") or "No pude completar esa solicitud todavía."
 
     # ── Intent Classification (Camino B — híbrido) ────────────

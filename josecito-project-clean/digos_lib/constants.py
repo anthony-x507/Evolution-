@@ -22,6 +22,7 @@ LOG_DIR = DIGOS_DIR / "logs"
 STRIKES_FILE = DIGOS_DIR / "strikes.json"
 SELF_FILE = DIGOS_DIR / "self.json"
 VAULT_FILE = DIGOS_DIR / "vault.enc"
+TIMELINE_FILE = DIGOS_DIR / "timeline.json"
 
 # ─────────────────────────────────────────────
 # LANGUAGES

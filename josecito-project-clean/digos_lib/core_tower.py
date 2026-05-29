@@ -32,6 +32,7 @@ from digos_lib.knowledge_base import KnowledgeBase
 from digos_lib.onboarding import OnboardingFlow
 from digos_lib.dream_cycle import DreamCycle
 from digos_lib.factory_status import FactoryStatusStore
+from digos_lib.internal_clock import InternalClock
 
 from adoption import AdoptionEngine, TransformationEngine
 from security import CajaSegura as SecurityCaja, CajaSeguraReport as SecurityReport
@@ -136,6 +137,7 @@ class TorreDeControl:
         self._factory_manager = None
         self._superior_agent = None
         self._factory_status = FactoryStatusStore()
+        self._clock = InternalClock()
 
         self._daemon_mode = daemon_mode
         self._running = False
@@ -172,6 +174,49 @@ class TorreDeControl:
         self.lang = lang
         return lang
 
+    def _start_clock_session(self):
+        """Start the local timeline session without using tickets or model tokens."""
+        try:
+            self._clock.start_session(metadata={
+                "language": self._active_language(),
+                "setup_complete": bool(self.state.get("setup_complete")),
+            })
+        except Exception as e:
+            self._log.info("clock", f"Internal clock unavailable: {e}")
+
+    def _end_clock_session(self):
+        try:
+            self._clock.end_session()
+        except Exception as e:
+            self._log.info("clock", f"Internal clock end failed: {e}")
+
+    def _record_timeline_event(
+        self,
+        role: str,
+        summary: str,
+        bullet_points: Optional[List[str]] = None,
+        event_type: str = "conversation",
+        metadata: Optional[Dict[str, Any]] = None,
+    ):
+        try:
+            return self._clock.record(
+                role=role,
+                summary=summary,
+                bullet_points=bullet_points or [],
+                event_type=event_type,
+                metadata=metadata or {},
+            )
+        except Exception as e:
+            self._log.info("clock", f"Timeline event skipped: {e}")
+            return None
+
+    def _temporal_context_for_agent(self, message: str = "", language: str = "es") -> str:
+        try:
+            return self._clock.context_card(message=message, language=language or self._active_language())
+        except Exception as e:
+            self._log.info("clock", f"Temporal context unavailable: {e}")
+            return ""
+
     def run(self):
         if self._daemon_mode:
             self._run_daemon()
@@ -200,6 +245,7 @@ class TorreDeControl:
             "\n  🚀 Iniciando componentes del sistema...",
         ))
         self._self_awareness.activate()
+        self._start_clock_session()
         self._gateway_mgr.init_gateways()
         self._init_bus()
         self._init_agent()
@@ -324,6 +370,7 @@ class TorreDeControl:
         Inicializa el agente y entra en un loop de chat."""
         self._running = True
         self._self_awareness.activate()
+        self._start_clock_session()
 
         # Telegram gateway (si hay token)
         vault = CajaSeguraInfo.read_slot("principal")
@@ -383,6 +430,7 @@ class TorreDeControl:
             except Exception:
                 pass
         self._self_awareness.pause()
+        self._end_clock_session()
         print("  👋 Goodbye!")
         print()
 
@@ -392,6 +440,7 @@ class TorreDeControl:
         """Modo daemon: Torre de Control vive 24/7 con TORRE activa."""
         self._running = True
         self._self_awareness.activate()
+        self._start_clock_session()
 
         # Initialize Phase 3 gateways (only if not already initialized)
         self._gateway_mgr.init_gateways()
@@ -421,6 +470,7 @@ class TorreDeControl:
                 except Exception:
                     pass
             self._self_awareness.pause()
+            self._end_clock_session()
 
         signal.signal(signal.SIGTERM, _handle_signal)
         signal.signal(signal.SIGINT, _handle_signal)
@@ -465,6 +515,7 @@ class TorreDeControl:
                 time.sleep(10)
 
         self._self_awareness.pause()
+        self._end_clock_session()
 
 
     def _centinela_cycle(self):
@@ -652,6 +703,13 @@ class TorreDeControl:
 
         total_tickets = len(self._engineer.get_all_tickets())
         print(f"  Total tickets creados: {total_tickets}")
+        print()
+
+        # Internal clock
+        clock_now = self._clock.now()
+        recent_timeline = len(self._clock.recent_events(limit=25))
+        print(f"  🕰️  Reloj interno: {clock_now['date']} {clock_now['time']} ({clock_now['timezone']})")
+        print(f"  Línea temporal: {recent_timeline} evento(s) recientes")
         print()
 
         # Gateways
@@ -972,6 +1030,13 @@ class TorreDeControl:
                 pipeline_stage="REGISTER",
                 note="Capability identified without an automatic Factory definition.",
             )
+            self._record_timeline_event(
+                role="factory",
+                summary=f"solicitud identificada sin definicion automatica: {capability}",
+                bullet_points=[family, "requiere revision manual"],
+                event_type="factory.ticket.registered",
+                metadata={"capability": capability, "audit_ticket_id": result.get("ticket_id", "")},
+            )
             result["user_status"] = self._factory_status.public_summary(capability, language=self._active_language())
             return result
 
@@ -1021,6 +1086,13 @@ class TorreDeControl:
             },
             next_step=activation_next_step,
             note="Capability request registered by the engineer.",
+        )
+        self._record_timeline_event(
+            role="factory",
+            summary=f"solicitud registrada: {capability}",
+            bullet_points=[family, "REGISTER completado"],
+            event_type="factory.ticket.registered",
+            metadata={"capability": capability, "audit_ticket_id": audit_ticket_id},
         )
 
         # ── 3. Initialize Factory if needed ──
@@ -1289,6 +1361,17 @@ class TorreDeControl:
                 else "Factory completed its part; VALIDATE did not pass and runtime activation is still pending."
             ),
         )
+        self._record_timeline_event(
+            role="factory",
+            summary=f"estado de capacidad: {capability}",
+            bullet_points=[
+                f"estado: {status}",
+                f"etapa: {'ACTIVATE' if is_active else ('VALIDATE' if factory_ok else 'BUILD')}",
+                "ticket sigue abierto" if not is_active else "ticket cerrado",
+            ],
+            event_type="factory.ticket.status",
+            metadata={"capability": capability, "audit_ticket_id": ticket_id},
+        )
         factory_result["active"] = is_active
         factory_result["status"] = status
         factory_result["audit_ticket_status"] = "closed" if is_active else ("pending_validation" if factory_ok else "open")
@@ -1453,6 +1536,8 @@ class TorreDeControl:
             creation_cb=self.request_internal_agent_creation,
             capability_cb=self.request_capability,
             factory_status_cb=self.get_factory_user_status,
+            timeline_cb=self._record_timeline_event,
+            temporal_context_cb=self._temporal_context_for_agent,
             language=self._active_language(),
         )
         self._log.info("torre",
