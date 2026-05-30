@@ -1541,6 +1541,108 @@ class TestTorreDeControl(unittest.TestCase):
         self.assertIsNotNone(self.tower._factory_manager)
 
 
+class TestFactoryOrchestraLifecycle(unittest.TestCase):
+    """Focused tests for Factory validation and activation gates."""
+
+    def test_factory_manager_does_not_close_live_capability_after_build_only(self):
+        from master.factory.manager import FactoryManager
+        from master.factory.ticket import TicketStatus
+
+        manager = FactoryManager()
+        manager.start(monitor=False)
+        try:
+            result = manager.request_new_capability(
+                capability_id="stt_audio_input",
+                family="VOICE",
+                description="Recibir mensajes de voz desde Telegram",
+                target_capabilities=["download Telegram voice", "transcribe voice"],
+                target_limitations=["no live channel yet"],
+                activation_requirements=[
+                    "connect Telegram voice intake",
+                    "run end-to-end voice validation",
+                ],
+                tool_name="stt_processor",
+                requested_by="test-agent",
+            )
+        finally:
+            manager.stop()
+
+        self.assertTrue(result.get("ok"), result.get("message"))
+        self.assertFalse(result.get("active"))
+        self.assertEqual(result.get("status"), "pending_activation")
+        self.assertFalse(result.get("closure_allowed"))
+        self.assertTrue(result.get("validation_required"))
+        self.assertIn("connect Telegram voice intake", result.get("activation_missing", []))
+
+        ticket = manager.get_ticket(result["ticket_id"])
+        self.assertIsNotNone(ticket)
+        self.assertEqual(ticket.status, TicketStatus.PENDING_ACTIVATION)
+        self.assertFalse(ticket.checkmarks["released"]["passed"])
+        self.assertFalse(ticket.payload["closure_allowed"])
+        self.assertFalse(ticket.payload["validation_passed"])
+        self.assertEqual(ticket.payload["pipeline_checkpoints"]["BUILD"], "done")
+        self.assertEqual(ticket.payload["pipeline_checkpoints"]["VALIDATE"], "failed")
+        self.assertEqual(ticket.payload["pipeline_checkpoints"]["ACTIVATE"], "blocked")
+
+        ticket.close()
+        self.assertEqual(ticket.status, TicketStatus.PENDING_ACTIVATION)
+        self.assertFalse(ticket.checkmarks["released"]["passed"])
+
+    def test_centinela_flags_false_orchestra_closure_risk(self):
+        from digos_lib.core_centinela import Centinela
+
+        centinela = Centinela(digos.LogKeeper())
+        reports = centinela.review_factory_orchestra({
+            "capability_requests": {
+                "telegram_web_search": {
+                    "capability": "telegram_web_search",
+                    "status": "pending_activation",
+                    "active": False,
+                    "closure_allowed": False,
+                    "pipeline_stage": "ACTIVATE",
+                    "pipeline_checkpoints": {
+                        "REGISTER": "done",
+                        "BUILD": "done",
+                        "VALIDATE": "failed",
+                        "ACTIVATE": "blocked",
+                    },
+                    "activation_missing": ["connect web search to Telegram"],
+                    "audit_ticket_id": "TICKET-1",
+                }
+            }
+        })
+
+        self.assertEqual(len(reports), 1)
+        self.assertEqual(reports[0]["capability"], "telegram_web_search")
+        self.assertEqual(reports[0]["severity"], "medium")
+        self.assertIn("validation", reports[0]["reason"].lower())
+
+    def test_centinela_flags_active_without_validation_as_high(self):
+        from digos_lib.core_centinela import Centinela
+
+        centinela = Centinela(digos.LogKeeper())
+        reports = centinela.review_factory_orchestra({
+            "capability_requests": {
+                "vision_image_input": {
+                    "capability": "vision_image_input",
+                    "status": "active",
+                    "active": True,
+                    "closure_allowed": True,
+                    "pipeline_checkpoints": {
+                        "REGISTER": "done",
+                        "BUILD": "done",
+                        "VALIDATE": "pending",
+                        "ACTIVATE": "done",
+                    },
+                }
+            }
+        })
+
+        self.assertEqual(len(reports), 1)
+        self.assertEqual(reports[0]["severity"], "high")
+        self.assertIn("validation evidence", reports[0]["reason"])
+
+
 # ─────────────────────────────────────────────
 # RUNNER
 # ─────────────────────────────────────────────
@@ -1566,6 +1668,7 @@ if __name__ == "__main__":
     suite.addTests(loader.loadTestsFromTestCase(TestAIAgent))
     suite.addTests(loader.loadTestsFromTestCase(TestFactoryStatusStore))
     suite.addTests(loader.loadTestsFromTestCase(TestTorreDeControl))
+    suite.addTests(loader.loadTestsFromTestCase(TestFactoryOrchestraLifecycle))
 
     runner = unittest.TextTestRunner(verbosity=2)
     result = runner.run(suite)

@@ -254,3 +254,78 @@ class Centinela:
         if target in self._strikes:
             del self._strikes[target]
             self._save_strikes()
+
+    # ── Factory orchestra monitoring ─────────────────────────────
+
+    def review_factory_orchestra(self, factory_status: dict) -> List[dict]:
+        """Detect capability tickets that are not ready to close.
+
+        Centinela does not build or activate tools. It watches the score:
+        REGISTER -> BUILD -> VALIDATE -> ACTIVATE must be complete before a
+        capability can be presented as working in Telegram.
+        """
+        requests = {}
+        if isinstance(factory_status, dict):
+            requests = factory_status.get("capability_requests", factory_status)
+        if not isinstance(requests, dict):
+            return []
+
+        reports = []
+        for capability, record in requests.items():
+            if not isinstance(record, dict):
+                continue
+            cap = str(record.get("capability") or capability)
+            status = str(record.get("status", "")).lower()
+            active = bool(record.get("active"))
+            closure_allowed = bool(record.get("closure_allowed"))
+            checkpoints = record.get("pipeline_checkpoints") or {}
+            validate_done = checkpoints.get("VALIDATE") == "done"
+            activate_done = checkpoints.get("ACTIVATE") == "done"
+            missing = list(record.get("activation_missing") or record.get("activation_requirements") or [])
+
+            reason = ""
+            severity = "medium"
+            if status in {"pending_validation", "pending_activation", "factory_completed_pending_activation"}:
+                reason = "Capability remains open until validation and activation pass."
+            elif active and (not closure_allowed or not validate_done or not activate_done):
+                reason = "Capability appears active without complete validation evidence."
+                severity = "high"
+            elif not active and closure_allowed:
+                reason = "Capability closure is allowed even though the live capability is not active."
+                severity = "high"
+            elif missing and (validate_done or activate_done):
+                reason = "Capability has missing activation links but later checkpoints are marked done."
+                severity = "high"
+
+            if not reason:
+                continue
+
+            report = {
+                "target": f"factory_orchestra:{cap}",
+                "capability": cap,
+                "severity": severity,
+                "status": status,
+                "reason": reason,
+                "missing": missing,
+                "pipeline_stage": record.get("pipeline_stage", ""),
+                "ticket_id": record.get("audit_ticket_id", ""),
+            }
+            reports.append(report)
+
+            report_key = f"factory_orchestra:{cap}:{status}:{severity}"
+            if self._engineer and report_key not in self._reported and severity == "high":
+                tid = self._engineer.create_ticket(
+                    "system",
+                    report["target"],
+                    reason,
+                    severity=severity,
+                    source="centinela",
+                )
+                self._engineer.add_note(
+                    "system",
+                    tid,
+                    "Centinela blocked false closure: VALIDATE and ACTIVATE must pass before delivery.",
+                )
+                self._reported.add(report_key)
+
+        return reports

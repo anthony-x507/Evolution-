@@ -195,7 +195,7 @@ class FactoryStatusStore:
         if language != "es":
             if active:
                 return "The requested capability is active."
-            if status in {"factory_completed_pending_activation", "pending_validation"}:
+            if status in {"factory_completed_pending_activation", "pending_validation", "pending_activation"}:
                 followup = record.get("engineer_followup", {}) or {}
                 public_note = str(followup.get("public_note", "")).strip()
                 if public_note and not public_note.lower().startswith("la solicitud"):
@@ -209,7 +209,7 @@ class FactoryStatusStore:
 
         if active:
             return "La capacidad solicitada ya está activa."
-        if status in {"factory_completed_pending_activation", "pending_validation"}:
+        if status in {"factory_completed_pending_activation", "pending_validation", "pending_activation"}:
             followup = record.get("engineer_followup", {}) or {}
             public_note = str(followup.get("public_note", "")).strip()
             if public_note:

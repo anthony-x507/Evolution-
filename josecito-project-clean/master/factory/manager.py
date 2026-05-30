@@ -234,6 +234,7 @@ class FactoryManager:
         target_capabilities = target_capabilities or ["to_be_defined"]
         target_limitations = target_limitations or ["to_be_defined"]
         activation_requirements = activation_requirements or []
+        requires_live_activation = bool(activation_requirements)
         factory_limitations = list(target_limitations)
         factory_limitations.extend(
             f"activation required: {item}"
@@ -282,6 +283,18 @@ class FactoryManager:
                 "target_capabilities": target_capabilities,
                 "target_limitations": factory_limitations,
                 "activation_requirements": activation_requirements,
+                "activation_missing": list(activation_requirements),
+                "requires_live_activation": requires_live_activation,
+                "validation_required": True,
+                "validation_passed": False,
+                "closure_allowed": False,
+                "pipeline_stage": "REGISTER",
+                "pipeline_checkpoints": {
+                    "REGISTER": "done",
+                    "BUILD": "pending",
+                    "VALIDATE": "pending",
+                    "ACTIVATE": "pending",
+                },
                 "tool_name": tool_name,
                 "builder_agent": agent_name,
             },
@@ -301,6 +314,8 @@ class FactoryManager:
 
         if sandboxed is None:
             _emit("error", "Failed to enter sandbox")
+            ticket.payload["pipeline_stage"] = "BUILD"
+            ticket.payload["pipeline_checkpoints"]["BUILD"] = "failed"
             ticket.block("Failed to enter sandbox")
             return {
                 "ok": False,
@@ -323,6 +338,8 @@ class FactoryManager:
 
         if revision is None:
             _emit("error", "Agent pipeline failed")
+            ticket.payload["pipeline_stage"] = "BUILD"
+            ticket.payload["pipeline_checkpoints"]["BUILD"] = "failed"
             ticket.block("Skill modification pipeline failed")
             self._sandbox.reject_skill(sandboxed.id, "Could not modify — no agents available")
             return {
@@ -339,8 +356,45 @@ class FactoryManager:
         # ── 5. Promote the skill to "superior" + Release ──
         _emit("promoting", tool_name)
         if self._superior.promote_skill(sandboxed.id):
+            ticket.checkmark_agent_work(
+                True,
+                agent_name,
+                f"Builder/Auditor/Reviewer advanced '{tool_name}' to v{revision}.",
+            )
+            ticket.payload["pipeline_checkpoints"]["BUILD"] = "done"
+
+            if requires_live_activation:
+                ticket.mark_pending_activation(
+                    "Factory build finished, but live-channel validation and activation are still required.",
+                    missing=activation_requirements,
+                )
+                _emit("pending_activation", f"{tool_name} v{revision} — requiere validacion viva")
+                return {
+                    "ok": True,
+                    "active": False,
+                    "status": "pending_activation",
+                    "ticket_id": ticket.id,
+                    "ticket_number": ticket.ticket_number,
+                    "sandbox_id": sandboxed.id,
+                    "agent_name": agent_name,
+                    "revision": revision,
+                    "tool_name": tool_name,
+                    "activation_requirements": activation_requirements,
+                    "activation_missing": activation_requirements,
+                    "validation_required": True,
+                    "closure_allowed": False,
+                    "pipeline_stage": "ACTIVATE",
+                    "pipeline_checkpoints": dict(ticket.payload["pipeline_checkpoints"]),
+                    "message": (
+                        f"Capacidad '{capability_id}' ({family}) avanzada por la Factoría, "
+                        "pero el ticket sigue abierto. Falta conectar, validar y activar "
+                        "la capacidad en el canal vivo antes de cerrarla."
+                    ),
+                }
+
+            ticket.mark_active([f"Skill '{tool_name}' promoted to superior"])
             ticket.checkmark_released(True, f"Skill '{tool_name}' promoted to superior")
-            ticket.resolve(f"New capability '{capability_id}' ({family}) built and promoted (v{revision})")
+            ticket.resolve(f"New capability '{capability_id}' ({family}) built, validated, and promoted (v{revision})")
             ticket.close()
             self._engineer._record_completed_ticket(ticket)
             self._engineer.total_released += 1
@@ -348,6 +402,8 @@ class FactoryManager:
             _emit("released", f"{tool_name} v{revision} — ✅")
             return {
                 "ok": True,
+                "active": True,
+                "status": "active",
                 "ticket_id": ticket.id,
                 "ticket_number": ticket.ticket_number,
                 "sandbox_id": sandboxed.id,
@@ -355,6 +411,11 @@ class FactoryManager:
                 "revision": revision,
                 "tool_name": tool_name,
                 "activation_requirements": activation_requirements,
+                "activation_missing": [],
+                "validation_required": False,
+                "closure_allowed": True,
+                "pipeline_stage": "ACTIVATE",
+                "pipeline_checkpoints": dict(ticket.payload["pipeline_checkpoints"]),
                 "message": (
                     f"Capacidad '{capability_id}' ({family}) creada en la Factoría. "
                     f"Builder '{agent_name}' la procesó. "
@@ -364,6 +425,10 @@ class FactoryManager:
             }
         else:
             _emit("error", "Promotion failed")
+            ticket.payload["pipeline_stage"] = "BUILD"
+            ticket.payload["pipeline_checkpoints"]["BUILD"] = "done"
+            ticket.payload["pipeline_checkpoints"]["VALIDATE"] = "failed"
+            ticket.payload["pipeline_checkpoints"]["ACTIVATE"] = "blocked"
             ticket.block("Promotion failed — skill not verified")
             return {
                 "ok": False,
@@ -485,7 +550,9 @@ class FactoryManager:
 
         active = self.get_tickets(status=TicketStatus.OPEN) + \
                  self.get_tickets(status=TicketStatus.IN_PROGRESS) + \
-                 self.get_tickets(status=TicketStatus.ASSIGNED)
+                 self.get_tickets(status=TicketStatus.ASSIGNED) + \
+                 self.get_tickets(status=TicketStatus.PENDING_VALIDATION) + \
+                 self.get_tickets(status=TicketStatus.PENDING_ACTIVATION)
         completed = self.get_tickets(status=TicketStatus.CLOSED)
 
         lines = [f"🎫 Factory Tickets ({self._engineer._ticket_counter} total)"]

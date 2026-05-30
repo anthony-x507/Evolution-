@@ -685,6 +685,16 @@ class TorreDeControl:
 
     def _centinela_cycle(self):
         """One cycle of Centinela checks. Also triggers nightly Dream Cycle."""
+        factory_reports = self._centinela.review_factory_orchestra(
+            self._factory_status._read()
+        )
+        for report in factory_reports:
+            self._log.warn(
+                "centinela",
+                f"Factory orchestra watch: {report['capability']} — {report['reason']}",
+                {"ticket": report.get("ticket_id", "")},
+            )
+
         vault = CajaSeguraInfo.read_slot("principal")
         if not vault:
             self._log.info("centinela", "No hay slot principal — saltando checks")

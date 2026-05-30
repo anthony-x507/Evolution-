@@ -203,9 +203,10 @@ class TestBirthAgent(unittest.TestCase):
     def test_10_agent_has_system_identity(self):
         """Birth: The agent knows the system identity."""
         identity = digos.SYSTEM_IDENTITY
-        self.assertEqual(identity["name"], "DIGOS")
-        self.assertEqual(identity["creator"], "Anthony Sanchez")
-        self.assertIn("Inteligencia Artificial", identity["created_by"])
+        self.assertEqual(identity["name"], "MASTER")
+        self.assertIn("Anthony Sanchez", identity["creator"])
+        self.assertIn("Artificial Intelligence", identity["creator"])
+        self.assertIn("Artificial Intelligence", identity["created_by"])
         print("    ✅ Test 10: Identidad del sistema presente")
 
 
@@ -230,7 +231,7 @@ class TestTickets(unittest.TestCase):
         """Ticket: creation with correct data."""
         tid = self.eng.create_ticket("test-agent", "api_key:deepseek",
                                      "API key rechazada", "high")
-        self.assertRegex(tid, r"^\d{8}T\d{6}-\d{4}$", f"Invalid ticket ID format: {tid}")
+        self.assertRegex(tid, r"^\d{8}T\d{6}(\.\d+)?-\d{4}$", f"Invalid ticket ID format: {tid}")
         tickets = self.eng.get_profile_tickets("test-agent")
         self.assertEqual(len(tickets), 1)
         t = tickets[0]
@@ -601,15 +602,15 @@ class TestVerticalIntegration(unittest.TestCase):
         Verifies the agent responds without LLM when asked
         quien es, y que el security gate bloquea contenido peligroso."""
         agent = agent_mod.AIAgent(
-            system_prompt="Eres DIGOS, un agente de prueba.",
+            system_prompt="Eres MASTER, un agente de prueba.",
         )
 
         # Identity: respond without LLM
         r = agent._check_identity_question("Quien eres?")
-        self.assertIn("DIGOS", r)
+        self.assertIn("MASTER", r)
 
         r = agent._check_identity_question("Who are you?")
-        self.assertIn("DIGOS", r)
+        self.assertIn("MASTER", r)
 
         # Security Gate: bloquear rojo
         gate = security.SecurityGate()

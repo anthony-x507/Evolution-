@@ -22,6 +22,9 @@ class TicketStatus(Enum):
     OPEN = "open"
     ASSIGNED = "assigned"
     IN_PROGRESS = "in_progress"
+    PENDING_VALIDATION = "pending_validation"
+    PENDING_ACTIVATION = "pending_activation"
+    ACTIVE = "active"
     BLOCKED = "blocked"
     RESOLVED = "resolved"
     CLOSED = "closed"
@@ -125,6 +128,11 @@ class Ticket:
 
     def resolve(self, resolution: str) -> None:
         """Resolve the ticket."""
+        if self.requires_live_activation() and not self.can_close_capability():
+            self.mark_pending_activation(
+                "Resolve blocked: live validation and activation are still required."
+            )
+            return
         self.status = TicketStatus.RESOLVED
         self.resolution = resolution
         self.resolved_at = datetime.now()
@@ -132,6 +140,11 @@ class Ticket:
 
     def close(self) -> None:
         """Close the ticket (final state)."""
+        if self.requires_live_activation() and not self.can_close_capability():
+            self.mark_pending_activation(
+                "Close blocked: live validation and activation are still required."
+            )
+            return
         self.status = TicketStatus.CLOSED
         self.updated_at = datetime.now()
 
@@ -201,11 +214,88 @@ class Ticket:
 
     def checkmark_released(self, passed: bool, details: str = "") -> None:
         """☑️ Mark the tool/skill as released by the Engineer."""
+        if passed and self.requires_live_activation() and not self.can_close_capability():
+            self.mark_pending_activation(
+                "Release blocked: live validation and activation are still required."
+            )
+            return
         self.checkmarks["released"] = {
             "passed": passed,
             "timestamp": datetime.now().isoformat(),
             "details": details,
         }
+        self.updated_at = datetime.now()
+
+    # ── Capability pipeline gates ────────────────────────────────
+
+    def requires_live_activation(self) -> bool:
+        """Does this ticket represent a capability that must work in a live channel?"""
+        return bool(
+            self.payload.get("requires_live_activation")
+            or self.payload.get("activation_requirements")
+            or self.payload.get("activation_missing")
+        )
+
+    def can_close_capability(self) -> bool:
+        """Can a live capability ticket be released/resolved/closed?"""
+        return bool(
+            self.payload.get("closure_allowed")
+            and self.payload.get("validation_passed")
+            and not self.payload.get("activation_missing")
+        )
+
+    def _set_pipeline_checkpoint(self, checkpoint: str, state: str) -> None:
+        pipeline = self.payload.setdefault("pipeline_checkpoints", {})
+        pipeline[checkpoint] = state
+
+    def mark_pending_validation(
+        self,
+        reason: str,
+        missing: Optional[List[str]] = None,
+    ) -> None:
+        """Keep the ticket open until validation evidence exists."""
+        self.status = TicketStatus.PENDING_VALIDATION
+        self.payload["validation_required"] = True
+        self.payload["validation_passed"] = False
+        self.payload["closure_allowed"] = False
+        if missing is not None:
+            self.payload["activation_missing"] = list(missing)
+        self.payload["pipeline_stage"] = "VALIDATE"
+        self._set_pipeline_checkpoint("VALIDATE", "pending")
+        self._set_pipeline_checkpoint("ACTIVATE", "blocked")
+        self.comments.append(f"PENDING_VALIDATION: {reason}")
+        self.updated_at = datetime.now()
+
+    def mark_pending_activation(
+        self,
+        reason: str,
+        missing: Optional[List[str]] = None,
+    ) -> None:
+        """Keep the ticket open until the live channel is connected and tested."""
+        self.status = TicketStatus.PENDING_ACTIVATION
+        self.payload["validation_required"] = True
+        self.payload["validation_passed"] = False
+        self.payload["closure_allowed"] = False
+        if missing is not None:
+            self.payload["activation_missing"] = list(missing)
+        self.payload["pipeline_stage"] = "ACTIVATE"
+        self._set_pipeline_checkpoint("VALIDATE", "failed")
+        self._set_pipeline_checkpoint("ACTIVATE", "blocked")
+        self.comments.append(f"PENDING_ACTIVATION: {reason}")
+        self.updated_at = datetime.now()
+
+    def mark_active(self, evidence: Optional[List[str]] = None) -> None:
+        """Mark a live capability as validated, activated, and safe to close."""
+        self.status = TicketStatus.ACTIVE
+        self.payload["validation_required"] = False
+        self.payload["validation_passed"] = True
+        self.payload["closure_allowed"] = True
+        self.payload["activation_missing"] = []
+        self.payload["pipeline_stage"] = "ACTIVATE"
+        self.payload.setdefault("activation_evidence", []).extend(evidence or [])
+        self._set_pipeline_checkpoint("VALIDATE", "done")
+        self._set_pipeline_checkpoint("ACTIVATE", "done")
+        self.comments.append("ACTIVE: live validation and activation passed.")
         self.updated_at = datetime.now()
 
     def all_checkmarks_passed(self) -> bool:
